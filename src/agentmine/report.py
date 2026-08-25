@@ -20,6 +20,29 @@ from .conform import CheckReport
 from .mine import END, START, Model
 
 
+# Отчёт, который заканчивается числом, — разовое любопытство. Число само по себе
+# ничего не требует сделать: посмотрел, удивился, закрыл. Повторно инструмент
+# открывают только те, у кого есть ПОВТОРЯЮЩИЙСЯ триггер, и таких триггера два —
+# правка промпта и релиз модели. Поэтому отчёт обязан заканчиваться не итогом,
+# а следующим шагом.
+NEXT_TITLE = "Что дальше"
+NEXT_LEAD = (
+    "Всё выше — срез одного момента. Он поедет при первой же правке промпта или "
+    "смене модели, и узнать об этом постфактум по счёту — самый дорогой способ."
+)
+NEXT_STEPS = [
+    ("agentmine diff before.parquet after.parquet",
+     "что изменилось в поведении: новые пути, рост длины прогона, цена за задачу"),
+    ("agentmine check events.parquet -p process.yaml",
+     "не пустить регрессию в мерж: коды возврата для CI, саммари в job summary"),
+]
+NEXT_TAIL = (
+    "`process.yaml` — объявленный процесс: как агент ДОЛЖЕН работать. Без него "
+    "находки выше описывают норму, с ним — отклонение от намерения. Это разница "
+    "между «агент часто вызывает Bash» и «в 21% задач файл правится без чтения»."
+)
+
+
 def _cell(s: str) -> str:
     """Вертикальная черта режет ячейку markdown-таблицы даже внутри `code`.
     А в отчёте она законна: так записана альтернатива в самом process.yaml."""
@@ -86,6 +109,11 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
             for e in f.evidence:
                 L.append(f"- {e}")
             L.append("")
+
+    L += [f"## {NEXT_TITLE}", "", NEXT_LEAD, "", "```bash"]
+    for cmd, why in NEXT_STEPS:
+        L += [f"{cmd}", f"#   {why}"]
+    L += ["```", "", NEXT_TAIL, ""]
 
     conc = m.cost_concentration()
     if conc and m.total_cost > 0:
@@ -249,6 +277,14 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
             for i, f in enumerate(found, 1)
         )
         find_block = f"<h2>Что чинить</h2><div class=finds>{cards}</div>"
+    steps = "".join(
+        f'<div class=st><code>{html.escape(cmd)}</code><span>{html.escape(why)}</span></div>'
+        for cmd, why in NEXT_STEPS
+    )
+    next_block = (
+        f"<h2>{NEXT_TITLE}</h2><div class=next><p>{html.escape(NEXT_LEAD)}</p>"
+        f"{steps}<p class=nt>{html.escape(NEXT_TAIL.replace(chr(96), ''))}</p></div>"
+    )
     stats = {
         "Кейсов": f"{m.n_cases:,}", "Событий": f"{m.n_events:,}",
         "Путей": f"{len(m.variants):,}", "Токенов": f"{m.total_tokens:,}",
@@ -291,10 +327,17 @@ border-radius:8px;padding:14px 16px}}
 border-radius:50%;background:var(--accent);color:#fff;font-size:11px;flex:none}}
 .f p{{margin:8px 0 0;color:var(--mut);font-size:13px}}
 .fe{{margin-top:6px;font-size:12px;color:var(--mut)}}
+.next{{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}}
+.next p{{margin:0 0 12px;font-size:13px}}.next .nt{{margin:12px 0 0;color:var(--mut)}}
+.st{{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;padding:6px 0;
+border-top:1px solid var(--line)}}
+.st code{{background:var(--cool);padding:3px 7px;border-radius:5px;white-space:nowrap}}
+.st span{{color:var(--mut);font-size:12px}}
 </style>
 <h1>agentmine</h1><div class=sub>{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} · вертикальный срез (Ц1)</div>
 <div class=tiles>{tiles}</div>
 {find_block}
+{next_block}
 <h2>Граф процесса</h2>
 <div class=scroll><svg width="{w}" height="{h}" viewBox="0 0 {w} {h}">
 <defs><marker id=a markerWidth=8 markerHeight=8 refX=7 refY=3 orient=auto>

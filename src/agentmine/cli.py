@@ -186,6 +186,12 @@ def report(
     for i, f in enumerate(found[:3], 1):
         tag = f" (до ${f.impact_usd:,.2f})" if f.impact_usd else ""
         typer.secho(f"  {i}. {f.title}{tag}", fg=typer.colors.CYAN)
+    # Разовый отчёт — разовое любопытство. Повторно открывают только по
+    # повторяющемуся триггеру, а их два: правка промпта и релиз модели.
+    if not process:
+        typer.secho("  дальше: `agentmine diff` — что изменилось после релиза; "
+                    "`agentmine check -p process.yaml` — не пустить регрессию в CI",
+                    fg=typer.colors.BRIGHT_BLACK)
 
 
 def _emit(var: str, text: str) -> None:
