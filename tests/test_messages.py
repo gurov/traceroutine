@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 
-from agentmine.adapters import pick
-from agentmine.adapters.messages import MessagesAdapter
-from agentmine.mine import mine
-from agentmine.model import COLUMNS
-from agentmine.normalize import normalize
+from traceroutine.adapters import pick
+from traceroutine.adapters.messages import MessagesAdapter
+from traceroutine.mine import mine
+from traceroutine.model import COLUMNS
+from traceroutine.normalize import normalize
 
 
 def rows(events):
@@ -56,7 +56,7 @@ def test_outcome_label_lands_on_every_event_of_the_case(tmp_path):
     """Исход — свойство прогона; без него не отфильтровать провалившиеся траектории."""
     p = write(tmp_path, [sess("ok", [["grep"]], resolved=True),
                          sess("bad", [["grep"]], resolved=False)])
-    got = {e.case_id: e.attrs.get("agentmine.outcome")
+    got = {e.case_id: e.attrs.get("traceroutine.outcome")
            for e in normalize(MessagesAdapter().read(p))}
     assert got == {"ok": "resolved", "bad": "failed"}
 

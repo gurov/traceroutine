@@ -88,7 +88,7 @@ def _usage_attrs(usage: dict) -> dict[str, Any]:
         "anthropic.usage.cache_creation.ephemeral_1h_input_tokens": tcw_1h,
         # У Anthropic input_tokens НЕ включает кеш — заявляем это явно, чтобы
         # normalize не гадал по величинам. См. semconv.input_includes_cache.
-        "agentmine.usage.input_includes_cache": False,
+        "traceroutine.usage.input_includes_cache": False,
     }
     thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
     if thinking:
@@ -180,7 +180,7 @@ class ClaudeCodeAdapter:
                 "gen_ai.operation.name": "chat",
                 "gen_ai.request.model": msg.get("model"),
                 "gen_ai.conversation.id": session,
-                "agentmine.task.id": first.get("_task") or session,
+                "traceroutine.task.id": first.get("_task") or session,
                 "gen_ai.agent.name": agent,
                 # usage одинаков во всех записях группы — берём один раз, иначе
                 # получится двойной счёт.
@@ -221,7 +221,7 @@ class ClaudeCodeAdapter:
                     attrs={
                         "gen_ai.tool.name": block.get("name"),
                         "gen_ai.conversation.id": session,
-                        "agentmine.task.id": first.get("_task") or session,
+                        "traceroutine.task.id": first.get("_task") or session,
                         "gen_ai.agent.name": agent,
                     },
                     status="error" if failed else "ok",

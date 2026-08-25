@@ -13,12 +13,12 @@ REGISTRY: dict[str, Adapter] = {a.name: a for a in (OtlpAdapter(), ClaudeCodeAda
 def pick(path: Path, name: str | None = None) -> Adapter:
     if name:
         if name not in REGISTRY:
-            raise SystemExit(f"неизвестный адаптер {name!r}; есть: {', '.join(REGISTRY)}")
+            raise SystemExit(f"unknown adapter {name!r}; available: {', '.join(REGISTRY)}")
         return REGISTRY[name]
     for adapter in REGISTRY.values():
         if adapter.detect(path):
             return adapter
-    raise SystemExit(f"не удалось определить формат {path}; укажите --adapter")
+    raise SystemExit(f"could not detect the format of {path}; pass --adapter")
 
 
 __all__ = ["Adapter", "ClaudeCodeAdapter", "MessagesAdapter", "OtlpAdapter", "REGISTRY", "pick"]

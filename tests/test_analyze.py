@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import pytest
 
-from agentmine.analyze import (RECOVERY_WINDOW, VARIANT_MIN_REUSE, _path_digest,
+from traceroutine.analyze import (RECOVERY_WINDOW, VARIANT_MIN_REUSE, _path_digest,
                                _rotation_key, context_inflation, drift, find_cycles,
                                findings)
-from agentmine.mine import Model, Variant, mine
+from traceroutine.mine import Model, Variant, mine
 
 
 def ev(case, act, cost=0.0, status="ok", tin=0, tcached=0, ts=0.0):
@@ -64,7 +64,7 @@ def test_path_digest_keeps_paths_distinguishable():
 
 def test_path_digest_truncates_only_very_long():
     long = tuple(f"s{i}" for i in range(20))
-    assert "ещё 8" in _path_digest(long)
+    assert "+8 more" in _path_digest(long)
 
 
 # --- находки ----------------------------------------------------------------

@@ -36,11 +36,11 @@ def normalize(
 ) -> Iterator[Event]:
     if case_notion not in CASE_NOTIONS and not case_notion.startswith("attr:"):
         raise SystemExit(
-            f"case notion {case_notion!r} не поддержан; "
-            f"есть: {', '.join(CASE_NOTIONS)} или attr:<имя атрибута>"
+            f"case notion {case_notion!r} is not supported; "
+            f"available: {', '.join(CASE_NOTIONS)} or attr:<attribute name>"
         )
     if flatten not in FLATTEN:
-        raise SystemExit(f"flatten {flatten!r}; есть: {', '.join(FLATTEN)}")
+        raise SystemExit(f"flatten {flatten!r}; available: {', '.join(FLATTEN)}")
 
     pricing = pricing or Pricing()
     spans = list(spans)

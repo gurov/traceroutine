@@ -13,7 +13,7 @@ mini-swe-agent и OpenHands на Hugging Face.
 Зато у таких корпусов есть то, чего нет в проде: **метка исхода**. `resolved`
 говорит, решена ли задача. Это переводит вопрос из «что дорого» в «какое
 поведение приводит к провалу» — а это уже про качество, а не только про счёт.
-Метка кладётся в атрибут `agentmine.outcome`.
+Метка кладётся в атрибут `traceroutine.outcome`.
 """
 from __future__ import annotations
 
@@ -92,13 +92,13 @@ class MessagesAdapter:
             outcome = sess.get("resolved")
         common: dict[str, Any] = {
             "gen_ai.conversation.id": case,
-            "agentmine.task.id": case,
+            "traceroutine.task.id": case,
             "gen_ai.agent.name": sess.get("agent_framework") or "agent",
         }
         if outcome is not None:
             # Исход — свойство ВСЕГО прогона, поэтому висит на каждом его событии:
             # иначе не отфильтровать «покажи только провалившиеся траектории».
-            common["agentmine.outcome"] = "resolved" if outcome else "failed"
+            common["traceroutine.outcome"] = "resolved" if outcome else "failed"
 
         clock = 0.0
         prev: str | None = None

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentmine.abstract import (SYSTEM, ActivityMap, Cluster, NoBackend, _parse, build,
+from traceroutine.abstract import (SYSTEM, ActivityMap, Cluster, NoBackend, _parse, build,
                                 canonical, stability)
 
 
@@ -104,7 +104,7 @@ def test_map_roundtrip(tmp_path):
     a.save(p)
     b = ActivityMap.load(p)
     assert (b.mapping, b.overrides, b.backend) == (a.mapping, a.overrides, a.backend)
-    assert "Правьте overrides" in p.read_text(encoding="utf-8")
+    assert "Edit overrides, not mapping" in p.read_text(encoding="utf-8")
 
 
 def test_no_backend_is_rules_only():
@@ -139,7 +139,7 @@ def test_stability_detects_disagreement():
 # параметры запроса. budget_tokens и prefill на Opus 5 дают 400.
 
 def test_anthropic_request_shape():
-    from agentmine.abstract import AnthropicBackend
+    from traceroutine.abstract import AnthropicBackend
 
     fake = MagicMock()
     # Метка должна быть достаточно отличимой: односимвольная проба встречается
@@ -173,7 +173,7 @@ def test_anthropic_request_shape():
 
 def test_gemini_schema_strips_unsupported_keys():
     """responseSchema у Gemini — подмножество OpenAPI: additionalProperties даёт 400."""
-    from agentmine.abstract import _SCHEMA, _gemini_schema
+    from traceroutine.abstract import _SCHEMA, _gemini_schema
 
     g = _gemini_schema(_SCHEMA)
     assert "additionalProperties" not in json.dumps(g)
@@ -185,7 +185,7 @@ def test_gemini_schema_strips_unsupported_keys():
 
 
 def test_gemini_request_shape(monkeypatch):
-    from agentmine.abstract import SYSTEM, GeminiBackend
+    from traceroutine.abstract import SYSTEM, GeminiBackend
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     captured = {}
@@ -228,7 +228,7 @@ def test_gemini_request_shape(monkeypatch):
 
 def test_gemini_truncated_response_is_an_error(monkeypatch):
     """MAX_TOKENS = обрезанный JSON = потерянные метки. Молчать нельзя."""
-    from agentmine.abstract import GeminiBackend
+    from traceroutine.abstract import GeminiBackend
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
 
@@ -255,7 +255,7 @@ def _ev(label, cost):
 
 def test_audit_flags_merging_priced_step_with_free_ones():
     """Счётчик активностей такое не ловит: цель достигнута, атрибуция уничтожена."""
-    from agentmine.abstract import ActivityMap, audit
+    from traceroutine.abstract import ActivityMap, audit
 
     amap = ActivityMap(mapping={"chat": "respond", "tool:write_answer": "respond"})
     warnings = audit(amap, [_ev("chat", 9.05), _ev("tool:write_answer", 0.0)])
@@ -266,7 +266,7 @@ def test_audit_flags_merging_priced_step_with_free_ones():
 def test_audit_respects_overrides():
     """РЕГРЕССИЯ: audit читал сырой mapping и ругался на уже починенное overrides —
     предупреждение, которое невозможно погасить, обесценивает все остальные."""
-    from agentmine.abstract import ActivityMap, audit
+    from traceroutine.abstract import ActivityMap, audit
 
     amap = ActivityMap(mapping={"chat": "respond", "tool:write_answer": "respond"},
                        overrides={"chat": "generate"})
@@ -274,7 +274,7 @@ def test_audit_respects_overrides():
 
 
 def test_audit_silent_when_activity_is_all_free():
-    from agentmine.abstract import ActivityMap, audit
+    from traceroutine.abstract import ActivityMap, audit
 
     amap = ActivityMap(mapping={"tool:a": "x", "tool:b": "x"})
     assert audit(amap, [_ev("tool:a", 0.0), _ev("tool:b", 0.0)]) == []

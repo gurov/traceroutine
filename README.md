@@ -1,9 +1,9 @@
-# agentmine
+# traceroutine
 
 Process mining for LLM agent traces — find out where the tokens and the time actually go.
 
 Observability platforms attribute spend by **who**: per user, per team, per API key, per
-request. `agentmine` attributes it by **how** — per execution path.
+request. `traceroutine` attributes it by **how** — per execution path.
 
 > An agent's cost is a property of its trajectory, not of its request.
 
@@ -13,8 +13,8 @@ If you use Claude Code, the data is already on your disk. No exporter, no collec
 no account anywhere:
 
 ```bash
-uvx agentmine ingest ~/.claude/projects -o events.parquet --case task
-uvx agentmine report events.parquet -f md
+uvx traceroutine ingest ~/.claude/projects -o events.parquet --case task
+uvx traceroutine report events.parquet -f md
 ```
 
 Here is what that reported on 442 of my own tasks, $748 of real spend:
@@ -25,21 +25,26 @@ Here is what that reported on 442 of my own tasks, $748 of real spend:
 > **every** subsequent turn: 100M tokens carried in total. Fix by truncating output,
 > not by switching models.
 
-That is the whole thesis in one finding. A tool call costs nothing when it happens and
-keeps costing for the rest of the run — so the unit of cost is the path, and no
-per-request dashboard can see it.
+That is the whole thesis in one finding: a tool call costs nothing when it happens and
+keeps costing for the rest of the run, so the unit of cost is the path.
+
+The phenomenon itself is known — context re-reading is widely documented as the largest
+cost driver in agent loops. What is missing everywhere else is the **attribution**: not
+"context grows", but *which* step's results carried *how many dollars* across the rest of
+the trajectory. Platforms recommend token counts per span, which is per call; this counts
+what a step cost on everything that came after it.
 
 ## Install
 
 ```bash
-uvx agentmine --help          # no install
-pip install agentmine         # or into your environment
+uvx traceroutine --help          # no install
+pip install traceroutine         # or into your environment
 ```
 
 From source:
 
 ```bash
-git clone https://github.com/OWNER/agentmine && cd agentmine
+git clone https://github.com/OWNER/traceroutine && cd traceroutine
 uv pip install -e .
 ```
 
@@ -153,7 +158,7 @@ and a failed check need different reactions, and CI only sees the code.
 deviation graph — to `$GITHUB_STEP_SUMMARY`, and its metrics to `$GITHUB_OUTPUT`.
 
 ```yaml
-- uses: OWNER/agentmine@v1
+- uses: OWNER/traceroutine@v1
   with: {traces: traces/, process: process.yaml, case: session}
 ```
 
@@ -168,7 +173,7 @@ fitness drop. Absolute thresholds need re-tuning after every release; relative o
 - rework rate, and the price of each cycle
 - separate accounting for cached and cache-written tokens — cache *writes* cost 1.25–2×
   input, so ignoring them undercounts, and folding cache reads into input overcounts by 10×
-- **context inflation** — what a step that shows $0.00 actually costs
+- **context inflation** — what a step that shows $0.00 actually costs on the rest of the run
 - fitness and a deviation map against a declared process
 
 ## When this will not help you
@@ -180,7 +185,7 @@ invented ones.
 100% at 26+. Above roughly 13 steps trajectories stop repeating, and "rare paths eat the
 budget" becomes the tautology "expensive runs are expensive". So the variant lens fits
 short structured agents — RAG, support, routing — and not long ones. When repeated paths
-drop below 50%, `agentmine` says so and suppresses those findings instead of dressing up a
+drop below 50%, `traceroutine` says so and suppresses those findings instead of dressing up a
 tautology. Abstraction helps but does not rescue it: on synthetic data a vocabulary lifts
 reuse from 11% to 78%, on real coding traces only from 32% to 37%. Length is the binding
 constraint, not granularity.
@@ -198,7 +203,7 @@ Adapters are the extension point: a two-method contract (`detect`, `read`), see
 `adapters/base.py`.
 
 Alignments are implemented here rather than via pm4py, deliberately. pm4py pulls in
-pandas + scipy + networkx, and `uvx agentmine` has to install in seconds; the model
+pandas + scipy + networkx, and `uvx traceroutine` has to install in seconds; the model
 language here is a regular expression over activities rather than an arbitrary Petri net,
 so alignment is exact and fits in a 0-1 BFS; all of pm4py's hard algorithmics exist for
 unbounded nets, which we do not have. The fitness formula is theirs:

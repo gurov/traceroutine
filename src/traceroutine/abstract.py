@@ -147,7 +147,7 @@ class AnthropicBackend:
         try:
             import anthropic
         except ImportError:
-            raise SystemExit("нужен пакет anthropic: uv pip install anthropic")
+            raise SystemExit("the anthropic package is required: uv pip install anthropic")
         self.model = model
         self.batch = batch
         self._an = anthropic
@@ -191,10 +191,10 @@ class AnthropicBackend:
             time.sleep(30)
         for res in self.client.messages.batches.results(batch.id):
             if res.result.type != "succeeded":
-                raise SystemExit(f"batch не удался: {res.result.type}")
+                raise SystemExit(f"batch failed: {res.result.type}")
             self._record(res.result.message)
             return _parse(next(b.text for b in res.result.message.content if b.type == "text"))
-        raise SystemExit("batch не вернул результатов")
+        raise SystemExit("batch returned no results")
 
     def _record(self, resp) -> None:
         u = resp.usage
@@ -263,7 +263,7 @@ class GeminiBackend:
         self.model = model
         self.key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not self.key:
-            raise SystemExit("нужен GEMINI_API_KEY (или GOOGLE_API_KEY) в окружении")
+            raise SystemExit("GEMINI_API_KEY (or GOOGLE_API_KEY) must be set in the environment")
         self.usage: list[dict] = []
 
     def cluster(self, labels: list[str], target: int) -> list[Cluster]:
@@ -301,11 +301,11 @@ class GeminiBackend:
         })
         cands = data.get("candidates") or []
         if not cands:
-            raise SystemExit(f"Gemini не вернул кандидатов: {str(data)[:300]}")
+            raise SystemExit(f"Gemini returned no candidates: {str(data)[:300]}")
         c0 = cands[0]
         if c0.get("finishReason") not in (None, "STOP"):
             # MAX_TOKENS здесь означает обрезанный JSON, то есть потерянные метки.
-            raise SystemExit(f"Gemini оборвал ответ: finishReason={c0['finishReason']}")
+            raise SystemExit(f"Gemini truncated the response: finishReason={c0['finishReason']}")
         parts = (c0.get("content") or {}).get("parts") or []
         return _parse("".join(p.get("text", "") for p in parts))
 
@@ -366,11 +366,11 @@ class ActivityMap:
 
     def save(self, path: Path) -> None:
         head = (
-            "# Словарь активностей agentmine — версионируемый артефакт проекта.\n"
+            "# traceroutine activity vocabulary — a versioned project artifact.\n"
             "#\n"
-            "# overrides правятся руками, имеют приоритет над mapping и ПЕРЕЖИВАЮТ\n"
-            "# перегенерацию. mapping перезаписывается при каждом `agentmine abstract`.\n"
-            "# Правьте overrides, а не mapping.\n"
+            "# `overrides` is hand-edited, wins over `mapping`, and SURVIVES\n"
+            "# regeneration. `mapping` is overwritten on every `traceroutine abstract`.\n"
+            "# Edit overrides, not mapping.\n"
         )
         body = yaml.safe_dump(
             {"version": 1, "generated": self.generated, "backend": self.backend,
@@ -453,10 +453,10 @@ def audit(amap: "ActivityMap", events: list[dict]) -> list[str]:
         if priced and free:
             share = sum(cost.get(l, 0.0) for l in priced) / total if total else 0
             out.append(
-                f"«{act}» смешивает платные шаги ({', '.join(sorted(priced))}) "
-                f"с бесплатными ({', '.join(sorted(free))}). "
-                f"На платные приходится {share:.0%} всех расходов — после слияния "
-                f"их не отделить. Разведите через overrides."
+                f"\"{act}\" merges paid steps ({', '.join(sorted(priced))}) with free "
+                f"ones ({', '.join(sorted(free))}). The paid ones carry {share:.0%} of "
+                f"all spend — once merged they cannot be told apart. Split them via "
+                f"overrides."
             )
     return out
 

@@ -4,7 +4,7 @@
 # чтобы поймать РЕГРЕССИЮ ПОВЕДЕНИЯ до мержа: агент стал ходить другим путём,
 # перестал проверять себя, начал зацикливаться. Смена модели и правка промпта
 # ломают именно это, а юнит-тесты такого не видят.
-name: agentmine
+name: traceroutine
 
 on:
   pull_request:
@@ -21,8 +21,8 @@ jobs:
       - name: Прогнать агента
         run: ./scripts/run-agent-suite.sh --out traces/
 
-      - id: agentmine
-        uses: ./                      # в своём репозитории: user/agentmine@v1
+      - id: traceroutine
+        uses: ./                      # в своём репозитории: user/traceroutine@v1
         with:
           traces: traces/
           process: process.yaml
@@ -33,4 +33,4 @@ jobs:
 
       # Саммари с графом отклонений экшен уже написал в job summary сам.
       - if: always()
-        run: echo "fitness=${{ steps.agentmine.outputs.fitness }} · ${{ steps.agentmine.outputs.usd-per-case }}/прогон"
+        run: echo "fitness=${{ steps.traceroutine.outputs.fitness }} · ${{ steps.traceroutine.outputs.usd-per-case }}/прогон"

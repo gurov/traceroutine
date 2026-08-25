@@ -53,7 +53,7 @@ SESSION = ("gen_ai.conversation.id", "session.id", "gen_ai.session.id")
 # куда более осмысленный process instance, чем сессия: сессия — это рабочий день,
 # в ней десяток независимых задач подряд, и как единый «прогон процесса» она
 # бессмысленна. Стандарта в semconv нет, поэтому свой ключ первым.
-TASK = ("agentmine.task.id", "gen_ai.task.id", "task.id")
+TASK = ("traceroutine.task.id", "gen_ai.task.id", "task.id")
 OPERATION = ("gen_ai.operation.name",)
 
 # Маркер ОПЕРАЦИИ, а не любой gen_ai.*-атрибут. Спаны вроде agent.run несут только
@@ -132,7 +132,7 @@ def extract(span: RawSpan) -> dict[str, Any]:
 #   Anthropic: input_tokens НЕ включает cache_read_input_tokens          → не трогать
 # Поэтому угадывать по величинам (`кеш больше входа — значит включён`) нельзя: у
 # Anthropic кеш штатно больше входа в тысячи раз, и такая эвристика молча обнуляет вход.
-INPUT_INCLUDES_CACHE = ("agentmine.usage.input_includes_cache",)
+INPUT_INCLUDES_CACHE = ("traceroutine.usage.input_includes_cache",)
 
 _FOLDED_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt", "text-embedding")
 _EXCLUSIVE_PREFIXES = ("claude-", "anthropic.claude", "gemini-", "models/gemini")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from agentmine.conform import (ANY, CheckReport, ConfigError, Process, Rule, align,
+from traceroutine.conform import (ANY, CheckReport, ConfigError, Process, Rule, align,
                                check, check_rule, findings, parse_flow)
 
 
@@ -45,8 +45,8 @@ def test_any_is_a_wildcard():
     """`plan -> any* -> respond` — самое частое реальное ожидание от агента:
     середина свободна, края обязательны."""
     n = parse_flow("plan -> any* -> respond")
-    assert align(n, ["plan", "чтоугодно", "и_ещё", "respond"])[0] == 0
-    assert align(n, ["чтоугодно"])[0] == 2
+    assert align(n, ["plan", "anything", "and_more", "respond"])[0] == 0
+    assert align(n, ["anything"])[0] == 2
     assert ANY not in n.alphabet()          # джокер не активность, в отчёте его быть не должно
 
 
@@ -80,9 +80,9 @@ def test_missing_step_is_a_model_move():
 
 def test_extra_step_is_a_log_move():
     n = parse_flow("plan -> respond")
-    cost, moves = align(n, ["plan", "лишнее", "respond"])
+    cost, moves = align(n, ["plan", "unexpected", "respond"])
     assert cost == 1
-    assert [(m.kind, m.activity) for m in moves if m.kind != "sync"] == [("log", "лишнее")]
+    assert [(m.kind, m.activity) for m in moves if m.kind != "sync"] == [("log", "unexpected")]
 
 
 def test_empty_trace_needs_the_whole_model():
@@ -159,7 +159,7 @@ def test_after_forbid_is_one_rule_not_two():
 def test_unknown_top_level_key_is_rejected():
     """Опечатка в ключе иначе молча отключает проверку, а CI остаётся зелёным.
     Зелёный CI, который ничего не проверяет, — худший возможный исход."""
-    with pytest.raises(ConfigError, match="неизвестные ключи"):
+    with pytest.raises(ConfigError, match="unknown keys"):
         proc(flow="a", rulez=[{"always": "a"}])
 
 
@@ -169,12 +169,12 @@ def test_unknown_threshold_is_rejected():
 
 
 def test_empty_process_is_rejected():
-    with pytest.raises(ConfigError, match="пуст"):
+    with pytest.raises(ConfigError, match="empty process"):
         proc(name="ничего")
 
 
 def test_unreadable_rule_is_rejected():
-    with pytest.raises(ConfigError, match="формы"):
+    with pytest.raises(ConfigError, match="forms"):
         proc(rules=[{"always": "a", "never": "b"}])
     with pytest.raises(ConfigError):
         proc(rules=["always: a"])
@@ -208,7 +208,7 @@ def test_fitness_and_conforming_share():
 def test_off_model_cost_is_the_cost_of_the_extra_steps():
     """Заголовочное число conformance — не оценка, а сумма стоимости шагов,
     которых в дизайне нет."""
-    evs = seq("c1", ["plan", "лишнее", "respond"], cost=2.0)
+    evs = seq("c1", ["plan", "unexpected", "respond"], cost=2.0)
     rep = check(proc(flow="plan -> respond"), evs)
     assert rep.off_model_cost == pytest.approx(2.0)
     assert rep.off_model_share == pytest.approx(2.0 / 6.0)
@@ -239,10 +239,10 @@ def test_unseen_activity_warns():
     """Активность объявлена, но в логе её нет: почти всегда опечатка или
     несовпадение уровня абстракции — и тогда проверка зелёная просто потому,
     что ей не с чем сравнивать."""
-    rep = check(proc(flow="plan -> respond", rules=[{"never": "опечатка"}]),
+    rep = check(proc(flow="plan -> respond", rules=[{"never": "typo"}]),
                 seq("c1", ["plan", "respond"]))
-    assert rep.unseen == ["опечатка"]
-    assert any("ни разу не встретились" in w for w in rep.warnings)
+    assert rep.unseen == ["typo"]
+    assert any("never seen in the log" in w for w in rep.warnings)
 
 
 def test_p95_is_not_the_mean():
@@ -258,7 +258,7 @@ def test_thresholds_produce_failures():
     p = proc(flow="plan -> respond",
              thresholds={"fitness_min": 0.99, "usd_per_case_max": 0.5,
                          "steps_p95_max": 2, "off_model_share_max": 0.01})
-    rep = check(p, seq("c1", ["plan", "лишнее", "respond"], cost=1.0))
+    rep = check(p, seq("c1", ["plan", "unexpected", "respond"], cost=1.0))
     assert not rep.ok
     assert len(rep.failures) == 4
 
@@ -289,21 +289,21 @@ def test_warn_rule_does_not_fail_the_build():
 def test_baseline_catches_cost_growth():
     p = proc(rules=[{"always": "a"}], thresholds={"usd_per_case_increase_max": 0.1})
     rep = check(p, seq("c1", ["a"], cost=2.0), baseline=seq("c1", ["a"], cost=1.0))
-    assert not rep.ok and "выросла" in rep.failures[0]
+    assert not rep.ok and "cost per run grew" in rep.failures[0]
 
 
 def test_baseline_catches_fitness_drop():
     """РЕГРЕССИЯ: порог объявлен в yaml — значит, обязан что-то проверять.
     Порог, который молча ничего не делает, хуже отсутствующего."""
     p = proc(flow="a -> b", thresholds={"fitness_drop_max": 0.05})
-    rep = check(p, seq("now", ["a", "лишнее", "b"]), baseline=seq("was", ["a", "b"]))
-    assert not rep.ok and "fitness просел" in rep.failures[0]
+    rep = check(p, seq("now", ["a", "unexpected", "b"]), baseline=seq("was", ["a", "b"]))
+    assert not rep.ok and "fitness dropped" in rep.failures[0]
 
 
 def test_baseline_catches_length_growth():
     p = proc(rules=[{"always": "a"}], thresholds={"steps_increase_max": 0.5})
     rep = check(p, seq("now", ["a"] * 4), baseline=seq("was", ["a", "a"]))
-    assert not rep.ok and "длины прогона" in rep.failures[0]
+    assert not rep.ok and "run length p95 grew" in rep.failures[0]
 
 
 def test_no_baseline_means_no_growth_checks():
@@ -316,10 +316,10 @@ def test_no_baseline_means_no_growth_checks():
 
 def test_conformance_finding_carries_the_money():
     p = proc(flow="plan -> respond")
-    rep = check(p, seq("c1", ["plan", "лишнее", "respond"], cost=2.0))
+    rep = check(p, seq("c1", ["plan", "unexpected", "respond"], cost=2.0))
     f = findings(rep)[0]
     assert f.kind == "conformance" and f.impact_usd == pytest.approx(2.0)
-    assert "лишний шаг `лишнее`" in " ".join(f.evidence)
+    assert "extra step `unexpected`" in " ".join(f.evidence)
 
 
 def test_no_finding_when_everything_conforms():
@@ -332,10 +332,10 @@ def test_rule_finding_wording_depends_on_the_rule_kind():
     правила. `never` при бесплатном инструменте объявлялся нарушением «того,
     чего не произошло» — хотя произошло ровно то, что запрещено."""
     rep = check(proc(rules=[{"never": "notify"}]), seq("c1", ["notify"], cost=0.0))
-    assert "токенов не тратят" in findings(rep)[0].detail
+    assert "burn no tokens themselves" in findings(rep)[0].detail
 
     rep = check(proc(rules=[{"after": "act", "expect": "verify"}]), seq("c1", ["act"], cost=5.0))
-    assert "чего НЕ произошло" in findings(rep)[0].detail
+    assert "did NOT happen" in findings(rep)[0].detail
 
 
 def test_alternation_reports_all_branches_not_one():
@@ -358,7 +358,7 @@ def test_near_zero_off_model_cost_is_not_reported_as_harmless():
     evs[0]["cost_usd"] = 5.0
     rep = check(proc(flow="plan -> respond"), evs)
     f = findings(rep)[0]
-    assert "токенов они не тратят" in f.detail
+    assert "burn no tokens themselves" in f.detail
     # Ярлык «до $0.00» рядом с находкой обесценивает её сильнее, чем его отсутствие.
     assert f.impact_usd == 0.0
 
@@ -380,8 +380,8 @@ def _events(tmp_path, traces, cost=1.0):
     """Мини-лог на диске: коды возврата проверяются только сквозь настоящий CLI."""
     from pathlib import Path
 
-    from agentmine.model import COLUMNS, Event
-    from agentmine.store import write
+    from traceroutine.model import COLUMNS, Event
+    from traceroutine.store import write
     evs = []
     for i, t in enumerate(traces):
         for j, a in enumerate(t):
@@ -398,7 +398,7 @@ def _events(tmp_path, traces, cost=1.0):
 def _run(*args):
     from typer.testing import CliRunner
 
-    from agentmine.cli import app
+    from traceroutine.cli import app
     return CliRunner().invoke(app, [str(a) for a in args])
 
 
@@ -415,7 +415,7 @@ def test_cli_exits_0_when_conforming(tmp_path):
 
 
 def test_cli_exits_1_when_violated(tmp_path):
-    ev_path = _events(tmp_path, [["plan", "лишнее", "respond"]])
+    ev_path = _events(tmp_path, [["plan", "unexpected", "respond"]])
     pr = _process(tmp_path, {"flow": "plan -> respond", "thresholds": {"fitness_min": 0.99}})
     assert _run("check", ev_path, "-p", pr).exit_code == 1
 
@@ -431,7 +431,7 @@ def test_cli_exits_2_on_broken_config(tmp_path):
 
 
 def test_cli_warn_only_never_fails(tmp_path):
-    ev_path = _events(tmp_path, [["plan", "лишнее", "respond"]])
+    ev_path = _events(tmp_path, [["plan", "unexpected", "respond"]])
     pr = _process(tmp_path, {"flow": "plan -> respond", "thresholds": {"fitness_min": 0.99}})
     assert _run("check", ev_path, "-p", pr, "--warn-only").exit_code == 0
 

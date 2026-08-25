@@ -150,7 +150,7 @@ def _path_digest(seq: tuple[str, ...], full_upto: int = 12) -> str:
     """
     if len(seq) <= full_upto:
         return " → ".join(seq)
-    return f"{' → '.join(seq[:full_upto])} …ещё {len(seq) - full_upto}"
+    return f"{' → '.join(seq[:full_upto])} …+{len(seq) - full_upto} more"
 
 
 # Ниже какой доли повторяющихся путей вариантный анализ перестаёт что-либо значить.
@@ -178,21 +178,21 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
         rhythm = c.cases / m.n_cases > 0.5 if m.n_cases else False
         out.append(Finding(
             kind="rhythm" if rhythm else "cycle",
-            title=(f"Рабочий цикл `{' → '.join(c.pattern)}` — {c.extra_cost / total:.0%} бюджета"
+            title=(f"Working rhythm `{' → '.join(c.pattern)}` — {c.extra_cost / total:.0%} of the budget"
                    if rhythm else
-                   f"Цикл `{' → '.join(c.pattern)}` прокручивается лишний раз"),
+                   f"Loop `{' → '.join(c.pattern)}` runs an extra time"),
             detail=(
-                (f"Встречается в {c.cases} прогонах из {m.n_cases} — это основной режим "
-                 f"работы агента, а не аномалия. Экономия здесь требует менять сам "
-                 f"подход, а не чинить отдельный путь. Максимум {c.max_repeats} "
-                 f"итераций подряд.") if rhythm else
-                (f"В {c.cases} прогонах из {m.n_cases} этот блок повторяется; "
-                 f"максимум {c.max_repeats} итераций подряд. Итерации сверх первой — "
-                 f"{c.extra_events} событий.")
+                (f"Present in {c.cases} of {m.n_cases} runs — this is how the agent "
+                 f"works, not an anomaly. Saving here means changing the approach, "
+                 f"not fixing one path. Up to {c.max_repeats} iterations in a row.")
+                if rhythm else
+                (f"This block repeats in {c.cases} of {m.n_cases} runs, up to "
+                 f"{c.max_repeats} times in a row. Iterations beyond the first "
+                 f"account for {c.extra_events} events.")
             ),
             impact_usd=0.0 if rhythm else c.extra_cost,
             share=c.extra_cost / total,
-            evidence=[f"повторов сверх первого: {c.occurrences}"],
+            evidence=[f"iterations beyond the first: {c.occurrences}"],
         ))
 
     # 2. Концентрация стоимости по траекториям.
@@ -206,11 +206,11 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
     if variants_apply and acc_cases and acc_cases <= 0.25:
         out.append(Finding(
             kind="concentration",
-            title=f"{acc_cases:.0%} прогонов дают {acc_cost:.0%} расходов",
-            detail=("Стоимость сосредоточена в узком классе траекторий. "
-                    "Оптимизировать средний запрос бессмысленно — чинить надо эти пути."),
+            title=f"{acc_cases:.0%} of runs account for {acc_cost:.0%} of spend",
+            detail=("Cost is concentrated in a narrow class of trajectories. "
+                    "Optimising the average request is pointless — fix these paths."),
             share=acc_cost,
-            evidence=[f"самый дорогой путь: {' → '.join(conc[0][0].seq[:6])}"],
+            evidence=[f"most expensive path: {' → '.join(conc[0][0].seq[:6])}"],
         ))
 
     # 3. Дорогой длинный хвост.
@@ -218,14 +218,14 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
     if variants_apply and tail and tail_cost / total > 0.1:
         out.append(Finding(
             kind="tail",
-            title=f"Редкие пути ({tail_share:.1%} прогонов) съедают {tail_cost / total:.0%} бюджета",
-            detail=("Каждый встречается реже чем в 5% случаев, но стоит вдвое дороже "
-                    "медианного прогона. В агрегированных дашбордах такие пути невидимы."),
+            title=f"Rare paths ({tail_share:.1%} of runs) eat {tail_cost / total:.0%} of the budget",
+            detail=("Each occurs in under 5% of runs but costs twice the median run. "
+                    "Aggregate dashboards cannot see paths like these at all."),
             impact_usd=tail_cost,
             share=tail_cost / total,
             # Обрезка пути до N шагов делала разные варианты неотличимыми в отчёте.
             # Показываем длину и середину пути, где они и расходятся.
-            evidence=[f"{v.n}× · ${v.cost_avg:.3f}/прогон · {len(v.seq)} шагов · "
+            evidence=[f"{v.n}× · ${v.cost_avg:.3f}/run · {len(v.seq)} steps · "
                       f"{_path_digest(v.seq)}" for v in tail[:3]],
         ))
 
@@ -235,10 +235,10 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
         top = ", ".join(f"{k} ×{n}" for k, n in kinds.most_common(3))
         out.append(Finding(
             kind="errors",
-            title=f"Разбор сбоев стоит {err_cost / total:.0%} бюджета",
-            detail=(f"{err_cases} прогонов из {m.n_cases} содержат хотя бы одну ошибку. "
-                    f"Платится не сама ошибка, а разбор её последствий: сюда посчитан "
-                    f"сбойный шаг и {RECOVERY_WINDOW} ближайших хода после него."),
+            title=f"Recovering from failures costs {err_cost / total:.0%} of the budget",
+            detail=(f"{err_cases} of {m.n_cases} runs contain at least one error. What "
+                    f"you pay for is not the error but the recovery: counted here are "
+                    f"the failing step and the {RECOVERY_WINDOW} turns after it."),
             impact_usd=err_cost,
             share=err_cost / total,
             evidence=[top],
@@ -252,12 +252,13 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
             if ss > 0.2 and cs < 0.1:
                 out.append(Finding(
                     kind="escalation",
-                    title=f"`{name}`: {cs:.1%} вызовов, {ss:.0%} расходов",
-                    detail=("Ресурс используется редко, но стоит непропорционально дорого. "
-                            "Проверьте, оправдана ли эскалация на каждом из этих путей."),
+                    title=f"`{name}`: {cs:.1%} of calls, {ss:.0%} of spend",
+                    detail=("This resource is used rarely but costs disproportionately "
+                            "much. Check whether escalating to it is justified on every "
+                            "one of those paths."),
                     impact_usd=r["cost"],
                     share=ss,
-                    evidence=[f"{r['n']:,} вызовов, {r['tokens']:,} токенов"],
+                    evidence=[f"{r['n']:,} calls, {r['tokens']:,} tokens"],
                 ))
                 break
 
@@ -267,12 +268,12 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
     if tin > 100_000 and tcached / (tin + tcached) < 0.05:
         out.append(Finding(
             kind="cache",
-            title="Кеш промптов практически не срабатывает",
-            detail=(f"Из {tin + tcached:,} входных токенов из кеша прочитано "
-                    f"{tcached:,} ({tcached / (tin + tcached):.1%}). Обычная причина — "
-                    "нестабильный префикс: меняющийся набор инструментов, timestamp "
-                    "или несортированный JSON в системном промпте."),
-            evidence=["кеш читается по префиксу: любое изменение инвалидирует хвост"],
+            title="Prompt cache almost never hits",
+            detail=(f"Of {tin + tcached:,} input tokens, {tcached:,} came from cache "
+                    f"({tcached / (tin + tcached):.1%}). The usual cause is an unstable "
+                    "prefix: a changing tool set, a timestamp, or unsorted JSON in the "
+                    "system prompt."),
+            evidence=["the cache matches by prefix: any change invalidates the tail"],
         ))
 
     # 7. Раздувание контекста. Работает там, где вариантный анализ уже бесполезен:
@@ -282,17 +283,17 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
         c = infl[0]
         out.append(Finding(
             kind="context",
-            title=f"Результаты `{c.step}` тянут {c.est_usd / total:.0%} бюджета через контекст",
+            title=f"Results of `{c.step}` carry {c.est_usd / total:.0%} of the budget through context",
             detail=(
-                f"Сам шаг не тратит ни одного токена и в разбивке по стоимости стоит "
-                f"$0.00. Но каждый его результат добавляет в промпт ~{c.added_avg:,.0f} "
-                f"токенов, и они перечитываются на КАЖДОМ последующем ходе: суммарно "
-                f"{c.carried_tokens / 1e6:,.1f}M токенов. Чинится усечением вывода, "
-                f"а не заменой модели."
+                f"The step itself burns no tokens and shows as $0.00 in every cost "
+                f"breakdown. But each of its results adds ~{c.added_avg:,.0f} tokens to "
+                f"the prompt, and those are re-read on EVERY later turn: "
+                f"{c.carried_tokens / 1e6:,.1f}M tokens in total. Fix by truncating the "
+                f"output, not by switching models."
             ),
             impact_usd=c.est_usd,
             share=c.est_usd / total,
-            evidence=[f"{x.step}: {x.n:,}× · +{x.added_avg:,.0f} ток. · ≈${x.est_usd:,.2f}"
+            evidence=[f"{x.step}: {x.n:,}× · +{x.added_avg:,.0f} tok · ≈${x.est_usd:,.2f}"
                       for x in infl],
         ))
 
@@ -303,18 +304,17 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
         med = sorted(len(v.seq) for v in m.variants)[len(m.variants) // 2] if m.variants else 0
         out.append(Finding(
             kind="not_applicable",
-            title="Вариантный анализ к этому логу неприменим",
+            title="Variant analysis does not apply to this log",
             detail=(
-                f"Повторяющихся путей всего {m.variant_reuse:.0%}: {len(m.variants)} "
-                f"путей на {m.n_cases} прогонов, медиана длины прогона — {med} шагов. "
-                f"Траектории такой длины не повторяются в принципе, поэтому выводы "
-                f"вида «редкие пути съедают бюджет» здесь были бы тавтологией и не "
-                f"показаны. Что помогает: укрупнить активности (`agentmine abstract`), "
-                f"выбрать более узкий case notion (`--case task`) — либо смотреть на "
-                f"метрики, не зависящие от длины: раздувание контекста и сравнение "
-                f"через `agentmine diff`."
+                f"Only {m.variant_reuse:.0%} of paths repeat: {len(m.variants)} paths "
+                f"across {m.n_cases} runs, median run length {med} steps. Trajectories "
+                f"that long never repeat, so conclusions like \"rare paths eat the "
+                f"budget\" would be tautologies here and are suppressed. What helps: "
+                f"coarser activities (`traceroutine abstract`), a narrower case notion "
+                f"(`--case task`) — or metrics that do not depend on length, namely "
+                f"context inflation and cohort comparison via `traceroutine diff`."
             ),
-            evidence=[f"порог применимости: повторяющихся путей ≥ {VARIANT_MIN_REUSE:.0%}"],
+            evidence=[f"applicability threshold: repeated paths ≥ {VARIANT_MIN_REUSE:.0%}"],
         ))
 
     # Список «что чинить» должен быть коротким, иначе это не список дел, а свалка.
@@ -345,8 +345,12 @@ def context_inflation(events: list[dict], top: int = 6) -> list[ContextCost]:
     оплачивается тридцать раз. Это и есть стоимость ТРАЕКТОРИИ, а не запроса:
     цена шага определяется не им самим, а тем, сколько ходов после него осталось.
 
-    Ни одна платформа наблюдаемости так не считает — они атрибутируют расход по
-    запросу и по пользователю, а не по тому, что этот расход породило.
+    Само явление известно: и вендоры, и работы 2026 года пишут, что перечитывание
+    контекста — крупнейшая статья расходов агента, а входные токены дают свыше 99%
+    объёма траектории. Чего не найдено ни у кого — это АТРИБУЦИЯ по конкретному
+    шагу: не «контекст растёт», а «результаты вот этого инструмента унесли $83».
+    Платформы рекомендуют счётчики токенов на каждом спане, то есть по вызову;
+    здесь считается, сколько шаг стоил на всём ОСТАТКЕ траектории после себя.
 
     В отличие от вариантного анализа, метрика не вырождается на длинных прогонах:
     чем длиннее траектория, тем она ЗНАЧИМЕЕ.

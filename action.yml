@@ -1,6 +1,6 @@
-name: 'agentmine check'
+name: 'traceroutine check'
 description: 'Проверить трейсы LLM-агента на соответствие объявленному процессу и порогам стоимости'
-author: 'agentmine'
+author: 'traceroutine'
 branding: {icon: 'git-branch', color: 'red'}
 
 inputs:
@@ -34,7 +34,7 @@ inputs:
   install:
     description: 'Что ставить: имя пакета, спецификатор версии или git+https://…'
     required: false
-    default: 'agentmine'
+    default: 'traceroutine'
 
 outputs:
   status:          {description: 'ok | failed',                          value: '${{ steps.check.outputs.status }}'}
@@ -66,7 +66,7 @@ runs:
         CASE: '${{ inputs.case }}'
         ADAPTER: '${{ inputs.adapter }}'
       run: |
-        agentmine ingest "$TRACES" -o events.parquet \
+        traceroutine ingest "$TRACES" -o events.parquet \
           --case "$CASE" ${ADAPTER:+--adapter "$ADAPTER"}
 
     - id: check
@@ -77,7 +77,7 @@ runs:
         BASELINE: '${{ inputs.baseline }}'
         WARN_ONLY: '${{ inputs.warn-only }}'
       run: |
-        agentmine check events.parquet -p "$PROCESS" \
+        traceroutine check events.parquet -p "$PROCESS" \
           ${MAP:+-m "$MAP"} \
           ${BASELINE:+--baseline "$BASELINE"} \
           $([ "$WARN_ONLY" = "true" ] && echo --warn-only)

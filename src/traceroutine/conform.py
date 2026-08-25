@@ -27,7 +27,7 @@
 
 **Почему не pm4py, хотя PLAN обещал его.** Три причины. (1) Он тянет
 pandas+scipy+networkx — это десятки мегабайт в дереве зависимостей, а Ц5 требует
-`uvx agentmine` без установки; цена слишком велика за одну функцию. (2) Наш язык
+`uvx traceroutine` без установки; цена слишком велика за одну функцию. (2) Наш язык
 модели — регулярное выражение над активностями, а не произвольная сеть Петри:
 для него выравнивание точное, а не приближённое, и укладывается в 0-1 BFS на
 полсотни строк. Вся сложность алгоритмики pm4py живёт в неограниченных сетях,
@@ -113,12 +113,12 @@ class NFA:
         одинаковые по смыслу, в одну строку вместо нескольких случайных.
         """
         if q not in self._exp:
-            syms = sorted({"любой шаг" if a == ANY else a for a, _ in self.moves(q)})
+            syms = sorted({"any step" if a == ANY else a for a, _ in self.moves(q)})
             # Семь альтернатив в строке таблицы нечитаемы; ключ отклонения от
             # обрезки не плывёт — он всё равно определяется точкой в модели.
             head = " | ".join(syms[:4])
-            self._exp[q] = (f"{head} … ещё {len(syms) - 4}" if len(syms) > 4
-                            else head) or "конец"
+            self._exp[q] = (f"{head} … +{len(syms) - 4} more" if len(syms) > 4
+                            else head) or "end of process"
         return self._exp[q]
 
     def shortest_run(self) -> int:
@@ -151,7 +151,7 @@ def parse_flow(expr: str) -> NFA:
         m = _TOK.match(expr, pos)
         if not m:
             if expr[pos:].strip():
-                raise ConfigError(f"flow: не разобрать с позиции {pos}: {expr[pos:pos + 20]!r}")
+                raise ConfigError(f"flow: cannot parse at position {pos}: {expr[pos:pos + 20]!r}")
             break
         toks.append(m.group(1))
         pos = m.end()
@@ -166,16 +166,16 @@ def parse_flow(expr: str) -> NFA:
         nonlocal i
         t = peek()
         if t is None:
-            raise ConfigError("flow: выражение обрывается")
+            raise ConfigError("flow: expression ends unexpectedly")
         if t == "(":
             i += 1
             frag = alt()
             if peek() != ")":
-                raise ConfigError("flow: не закрыта скобка")
+                raise ConfigError("flow: unclosed parenthesis")
             i += 1
             return frag
         if t in ("|", ")", "->", "*", "+", "?"):
-            raise ConfigError(f"flow: неожиданный {t!r}")
+            raise ConfigError(f"flow: unexpected {t!r}")
         i += 1
         s, e = nfa.state(), nfa.state()
         nfa.sym[s].append((ANY if t == "any" else t, e))
@@ -223,7 +223,7 @@ def parse_flow(expr: str) -> NFA:
 
     nfa.start, nfa.accept = alt()
     if i != len(toks):
-        raise ConfigError(f"flow: лишнее после выражения: {' '.join(toks[i:])!r}")
+        raise ConfigError(f"flow: trailing input after expression: {' '.join(toks[i:])!r}")
     return nfa
 
 
@@ -311,14 +311,14 @@ class Rule:
     @property
     def text(self) -> str:
         return {
-            "always": f"`{self.a}` обязана встретиться",
-            "never":  f"`{self.a}` не должна встречаться",
-            "first":  f"прогон начинается с `{self.a}`",
-            "last":   f"прогон заканчивается на `{self.a}`",
-            "after":  f"после `{self.a}` когда-нибудь должна быть `{self.b}`",
-            "before": f"перед `{self.a}` должна быть `{self.b}`",
-            "forbid": f"сразу за `{self.a}` не должна идти `{self.b}`",
-            "max":    f"`{self.a}` не чаще {self.n}× за прогон",
+            "always": f"`{self.a}` must occur",
+            "never":  f"`{self.a}` must never occur",
+            "first":  f"a run starts with `{self.a}`",
+            "last":   f"a run ends with `{self.a}`",
+            "after":  f"after `{self.a}`, `{self.b}` must eventually follow",
+            "before": f"before `{self.a}`, `{self.b}` must have happened",
+            "forbid": f"`{self.b}` must not come directly after `{self.a}`",
+            "max":    f"`{self.a}` at most {self.n}× per run",
         }[self.kind]
 
     def activities(self) -> set[str]:
@@ -373,7 +373,7 @@ def check_rule(rule: Rule, seq: list[str], costs: list[float]) -> tuple[int, flo
         idx = [i for i, a in enumerate(seq) if a == rule.a]
         extra = idx[rule.n:]
         return len(extra), sum(costs[i] for i in extra)
-    raise ConfigError(f"неизвестное правило {k!r}")
+    raise ConfigError(f"unknown rule kind {k!r}")
 
 
 # --- конфиг -----------------------------------------------------------------
@@ -398,7 +398,7 @@ _THRESHOLD_KEYS = set(Thresholds.__annotations__) - {"BASELINE"}
 
 @dataclass
 class Process:
-    name: str = "процесс"
+    name: str = "process"
     flow: str | None = None
     rules: list[Rule] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -425,9 +425,9 @@ class Process:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
-            raise ConfigError(f"{path}: не разобрать yaml: {exc}") from exc
+            raise ConfigError(f"{path}: cannot parse yaml: {exc}") from exc
         if not isinstance(data, dict):
-            raise ConfigError(f"{path}: ожидался словарь на верхнем уровне")
+            raise ConfigError(f"{path}: expected a mapping at the top level")
         return Process.from_dict(data)
 
     @staticmethod
@@ -437,9 +437,9 @@ class Process:
         # остаётся зелёным. Зелёный CI, который ничего не проверяет, — худший
         # возможный исход для этого инструмента.
         if unknown := set(data) - known:
-            raise ConfigError(f"неизвестные ключи: {', '.join(sorted(unknown))}; "
-                              f"допустимы: {', '.join(sorted(known))}")
-        p = Process(name=str(data.get("name") or "процесс"), case=data.get("case"))
+            raise ConfigError(f"unknown keys: {', '.join(sorted(unknown))}; "
+                              f"allowed: {', '.join(sorted(known))}")
+        p = Process(name=str(data.get("name") or "process"), case=data.get("case"))
         if data.get("flow"):
             p.flow = str(data["flow"]).strip()
             p.nfa = parse_flow(p.flow)
@@ -447,13 +447,13 @@ class Process:
             p.rules.append(_rule(raw))
         t = data.get("thresholds") or {}
         if not isinstance(t, dict):
-            raise ConfigError("thresholds: ожидался словарь")
+            raise ConfigError("thresholds: expected a mapping")
         if unknown := set(t) - _THRESHOLD_KEYS:
-            raise ConfigError(f"thresholds: неизвестные ключи {', '.join(sorted(unknown))}; "
-                              f"допустимы: {', '.join(sorted(_THRESHOLD_KEYS))}")
+            raise ConfigError(f"thresholds: unknown keys {', '.join(sorted(unknown))}; "
+                              f"allowed: {', '.join(sorted(_THRESHOLD_KEYS))}")
         p.thresholds = Thresholds(**{k: float(v) for k, v in t.items()})
         if not p.flow and not p.rules:
-            raise ConfigError("процесс пуст: нужен хотя бы flow или одно правило")
+            raise ConfigError("empty process: needs at least a flow or one rule")
         return p
 
 
@@ -470,7 +470,7 @@ def _rule(raw: Any) -> Rule:
     """Правило из yaml. Формы читаются вслух как само требование — это не
     косметика: правило, которое нельзя прочесть, не будет написано."""
     if not isinstance(raw, dict):
-        raise ConfigError(f"правило должно быть словарём, получено: {raw!r}")
+        raise ConfigError(f"a rule must be a mapping, got: {raw!r}")
     opts = {"allow": float(raw.get("allow") or 0.0), "warn": bool(raw.get("warn"))}
     body = {k: v for k, v in raw.items() if k not in ("allow", "warn")}
     keys = set(body)
@@ -487,15 +487,15 @@ def _rule(raw: Any) -> Rule:
         try:
             n = int(body["max"])
         except (TypeError, ValueError) as exc:
-            raise ConfigError(f"max должно быть числом: {raw!r}") from exc
+            raise ConfigError(f"max must be a number: {raw!r}") from exc
         return Rule("max", str(body["of"]), n=n, **opts)
     if len(keys) == 1:
         (k,) = keys
         if k in ("always", "never", "first", "last"):
             return Rule(k, str(body[k]), **opts)
 
-    raise ConfigError(f"не понимаю правило {raw!r}; формы: {', '.join(_FORMS)} "
-                      f"(плюс необязательные allow: и warn:)")
+    raise ConfigError(f"unrecognised rule {raw!r}; forms: {', '.join(_FORMS)} "
+                      f"(plus optional allow: and warn:)")
 
 
 # --- результат --------------------------------------------------------------
@@ -615,14 +615,14 @@ def check(process: Process, events: list[dict],
     rep.unseen = sorted(process.activities() - seen)
     if rep.unseen:
         rep.warnings.append(
-            f"объявлены, но ни разу не встретились в логе: {', '.join(rep.unseen)}. "
-            f"Проверьте имена активностей и словарь (`agentmine abstract`) — иначе "
-            f"проверка зелёная просто потому, что ей не с чем сравнивать."
+            f"declared but never seen in the log: {', '.join(rep.unseen)}. Check the "
+            f"activity names and the vocabulary (`traceroutine abstract`) — otherwise "
+            f"the check is green simply because it has nothing to compare against."
         )
     if process.case:
         rep.warnings.append(
-            f"процесс объявлен для case notion `{process.case}` — убедитесь, что лог "
-            f"собран с `--case {process.case}`."
+            f"this process is declared for case notion `{process.case}` — make sure the "
+            f"log was built with `--case {process.case}`."
         )
 
     _verdict(rep, check(process, baseline) if baseline is not None else None)
@@ -635,19 +635,19 @@ def _verdict(rep: CheckReport, base: "CheckReport | None") -> None:
         rep.failures.append(f"fitness {rep.fitness:.3f} < {t.fitness_min:.3f}")
     if t.usd_per_case_max is not None and rep.usd_per_case > t.usd_per_case_max:
         rep.failures.append(
-            f"${rep.usd_per_case:.4f} на прогон > ${t.usd_per_case_max:.4f}")
+            f"${rep.usd_per_case:.4f} per run > ${t.usd_per_case_max:.4f}")
     if t.steps_p95_max is not None and rep.steps_p95 > t.steps_p95_max:
-        rep.failures.append(f"p95 длины прогона {rep.steps_p95:.0f} > {t.steps_p95_max:.0f}")
+        rep.failures.append(f"run length p95 {rep.steps_p95:.0f} > {t.steps_p95_max:.0f}")
     if t.off_model_share_max is not None and rep.off_model_share > t.off_model_share_max:
         rep.failures.append(
-            f"вне модели {rep.off_model_share:.1%} бюджета > {t.off_model_share_max:.1%}")
+            f"off-model spend {rep.off_model_share:.1%} > {t.off_model_share_max:.1%}")
 
     for st in rep.rules:
         if st.ok(rep.n_cases):
             continue
-        msg = (f"{st.rule.text}: нарушено в {st.cases} прогонах "
+        msg = (f"{st.rule.text}: violated in {st.cases} runs "
                f"({st.share(rep.n_cases):.1%}"
-               + (f", допустимо {st.rule.allow:.1%}" if st.rule.allow else "") + ")")
+               + (f", allowed {st.rule.allow:.1%}" if st.rule.allow else "") + ")")
         (rep.rule_warnings if st.rule.warn else rep.failures).append(msg)
 
     if base is None:
@@ -656,24 +656,24 @@ def _verdict(rep: CheckReport, base: "CheckReport | None") -> None:
         grow = (rep.usd_per_case - base.usd_per_case) / base.usd_per_case
         if grow > t.usd_per_case_increase_max:
             rep.failures.append(
-                f"стоимость прогона выросла на {grow:+.1%} "
+                f"cost per run grew {grow:+.1%} "
                 f"(${base.usd_per_case:.4f} → ${rep.usd_per_case:.4f}), "
-                f"допустимо {t.usd_per_case_increase_max:+.1%}")
+                f"allowed {t.usd_per_case_increase_max:+.1%}")
     if t.steps_increase_max is not None and base.steps_p95:
         grow = (rep.steps_p95 - base.steps_p95) / base.steps_p95
         if grow > t.steps_increase_max:
             rep.failures.append(
-                f"p95 длины прогона вырос на {grow:+.1%} "
+                f"run length p95 grew {grow:+.1%} "
                 f"({base.steps_p95:.0f} → {rep.steps_p95:.0f}), "
-                f"допустимо {t.steps_increase_max:+.1%}")
+                f"allowed {t.steps_increase_max:+.1%}")
     if (t.fitness_drop_max is not None and rep.fitness is not None
             and base.fitness is not None):
         drop = base.fitness - rep.fitness
         if drop > t.fitness_drop_max:
             rep.failures.append(
-                f"fitness просел на {drop:.3f} "
+                f"fitness dropped by {drop:.3f} "
                 f"({base.fitness:.3f} → {rep.fitness:.3f}), "
-                f"допустимо {t.fitness_drop_max:.3f}")
+                f"allowed {t.fitness_drop_max:.3f}")
 
 
 def findings(rep: CheckReport, limit: int = 3) -> list[Finding]:
@@ -696,50 +696,51 @@ def findings(rep: CheckReport, limit: int = 3) -> list[Finding]:
                 # вне модели почти всегда оказываются вызовы инструментов, а они не
                 # тратят токенов сами — их цена в контексте, который они несут
                 # дальше по траектории.
-                money = (f"Прямая стоимость этих шагов почти нулевая "
-                         f"(${rep.off_model_cost:,.2f}) — это вызовы инструментов, "
-                         f"токенов они не тратят. Их настоящая цена в контексте: "
-                         f"результат каждого перечитывается на всех последующих ходах.")
+                money = (f"Their direct cost is near zero (${rep.off_model_cost:,.2f}) "
+                         f"— these are tool calls and they burn no tokens themselves. "
+                         f"Their real price is context: each result is re-read on every "
+                         f"later turn.")
             else:
-                money = (f"На шаги, которых в дизайне нет, ушло "
-                         f"${rep.off_model_cost:,.2f} ({rep.off_model_share:.0%} бюджета) — "
-                         f"это не оценка, а сумма стоимости самих этих шагов.")
+                money = (f"Steps that are not in the design cost "
+                         f"${rep.off_model_cost:,.2f} ({rep.off_model_share:.0%} of the "
+                         f"budget) — not an estimate, but the summed cost of those steps.")
             out.append(Finding(
                 kind="conformance",
-                title=(f"{broke / rep.n_cases:.0%} прогонов отклоняются от объявленного "
-                       f"процесса «{rep.process.name}»"),
+                title=(f"{broke / rep.n_cases:.0%} of runs deviate from the declared "
+                       f"process \"{rep.process.name}\""),
                 detail=(
-                    f"fitness {rep.fitness:.2f}: {rep.fitting} из {rep.n_cases} прогонов "
-                    f"легли на модель без отклонений. {extra} шагов вне модели. {money}"
+                    f"fitness {rep.fitness:.2f}: {rep.fitting} of {rep.n_cases} runs fit "
+                    f"the model with no deviation at all. {extra} steps off-model. {money}"
                 ),
                 # Ярлык «до $1.05» рядом с «96% прогонов отклоняются» обесценивает
                 # находку сильнее, чем его отсутствие. Денег нет — не называем сумму.
                 impact_usd=0.0 if trivial else rep.off_model_cost,
                 share=rep.off_model_share,
-                evidence=([f"лишний шаг `{d.activity}`: {d.n}× в {d.cases} прогонах"
+                evidence=([f"extra step `{d.activity}`: {d.n}× in {d.cases} runs"
                            + (f", ${d.cost:,.2f}" if d.cost else "") for d in top]
-                          + [f"не хватило `{d.activity}`: {d.cases} прогонов"
+                          + [f"missing `{d.activity}`: {d.cases} runs"
                              for d in skipped]),
             ))
     for st in sorted(rep.rules, key=lambda s: (-s.cost, -s.cases)):
         if not st.cases or st.ok(rep.n_cases):
             continue
         if st.rule.kind not in _COSTED:
-            money = " Нарушение в том, чего НЕ произошло, — денег ему не приписываем."
+            money = (" The violation is something that did NOT happen, so no money is "
+                     "attributed to it.")
         elif st.cost:
-            money = f" Стоимость самих нарушающих шагов — ${st.cost:,.2f}."
+            money = f" The offending steps themselves cost ${st.cost:,.2f}."
         else:
             # Ноль здесь не значит «бесплатно»: вызов инструмента не тратит токенов
             # сам, но его результат перечитывается на каждом следующем ходе.
-            money = (" Сами эти шаги токенов не тратят; их цена — в контексте, "
-                     "который они добавляют на весь остаток прогона.")
+            money = (" These steps burn no tokens themselves; their price is the "
+                     "context they add for the rest of the run.")
         out.append(Finding(
             kind="rule",
-            title=f"Нарушено правило: {st.rule.text}",
-            detail=(f"{st.cases} прогонов из {rep.n_cases} ({st.share(rep.n_cases):.1%}), "
-                    f"{st.events} случаев." + money),
+            title=f"Rule violated: {st.rule.text}",
+            detail=(f"{st.cases} of {rep.n_cases} runs ({st.share(rep.n_cases):.1%}), "
+                    f"{st.events} occurrences." + money),
             impact_usd=st.cost,
             share=st.cost / rep.total_cost if rep.total_cost else 0.0,
-            evidence=[f"например: {', '.join(st.examples)}"] if st.examples else [],
+            evidence=[f"for example: {', '.join(st.examples)}"] if st.examples else [],
         ))
     return out[:limit]

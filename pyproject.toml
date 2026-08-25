@@ -1,5 +1,5 @@
 [project]
-name = "agentmine"
+name = "traceroutine"
 version = "0.1.0"
 description = "Process mining for LLM agent traces: find out where the tokens and the time actually go"
 readme = "README.md"
@@ -38,19 +38,19 @@ anthropic = ["anthropic>=0.40"]
 
 # TODO перед публикацией: заменить OWNER на свой github-аккаунт.
 [project.urls]
-Homepage = "https://github.com/OWNER/agentmine"
-Repository = "https://github.com/OWNER/agentmine"
-Issues = "https://github.com/OWNER/agentmine/issues"
+Homepage = "https://github.com/OWNER/traceroutine"
+Repository = "https://github.com/OWNER/traceroutine"
+Issues = "https://github.com/OWNER/traceroutine/issues"
 
 [project.scripts]
-agentmine = "agentmine.cli:app"
+traceroutine = "traceroutine.cli:app"
 
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentmine"]
+packages = ["src/traceroutine"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/", "tests/", "examples/", "README.md", "LICENSE", "action.yml"]

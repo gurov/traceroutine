@@ -10,10 +10,10 @@ import json
 
 import pytest
 
-from agentmine.adapters import pick
-from agentmine.adapters.claude_code import ClaudeCodeAdapter
-from agentmine.normalize import normalize
-from agentmine.pricing import Pricing
+from traceroutine.adapters import pick
+from traceroutine.adapters.claude_code import ClaudeCodeAdapter
+from traceroutine.normalize import normalize
+from traceroutine.pricing import Pricing
 
 SESSION = "s-1"
 

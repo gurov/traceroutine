@@ -49,7 +49,7 @@ RESPOND = ["write_answer", "format_response(md)", "emit_final"]
 
 def main(n_cases=400, seed=7, drift=0.0):
     """drift>0 имитирует смену модели: агент чаще зацикливается и чаще эскалирует.
-    Нужен, чтобы было на чём показать `agentmine diff`."""
+    Нужен, чтобы было на чём показать `traceroutine diff`."""
     rnd = random.Random(seed)
     spans, t = [], 1_768_000_000.0
 

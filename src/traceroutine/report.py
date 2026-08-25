@@ -25,21 +25,22 @@ from .mine import END, START, Model
 # открывают только те, у кого есть ПОВТОРЯЮЩИЙСЯ триггер, и таких триггера два —
 # правка промпта и релиз модели. Поэтому отчёт обязан заканчиваться не итогом,
 # а следующим шагом.
-NEXT_TITLE = "Что дальше"
+NEXT_TITLE = "What next"
 NEXT_LEAD = (
-    "Всё выше — срез одного момента. Он поедет при первой же правке промпта или "
-    "смене модели, и узнать об этом постфактум по счёту — самый дорогой способ."
+    "Everything above is a snapshot of one moment. It will move on the next prompt "
+    "edit or model swap, and finding that out from the invoice is the expensive way."
 )
 NEXT_STEPS = [
-    ("agentmine diff before.parquet after.parquet",
-     "что изменилось в поведении: новые пути, рост длины прогона, цена за задачу"),
-    ("agentmine check events.parquet -p process.yaml",
-     "не пустить регрессию в мерж: коды возврата для CI, саммари в job summary"),
+    ("traceroutine diff before.parquet after.parquet",
+     "what changed in behaviour: new paths, longer runs, cost per task"),
+    ("traceroutine check events.parquet -p process.yaml",
+     "keep regressions out of main: CI exit codes, a summary in the job summary"),
 ]
 NEXT_TAIL = (
-    "`process.yaml` — объявленный процесс: как агент ДОЛЖЕН работать. Без него "
-    "находки выше описывают норму, с ним — отклонение от намерения. Это разница "
-    "между «агент часто вызывает Bash» и «в 21% задач файл правится без чтения»."
+    "`process.yaml` is the declared process: how the agent is SUPPOSED to work. "
+    "Without it the findings above describe the norm; with it they describe a "
+    "deviation from intent. That is the difference between \"the agent calls Bash a "
+    "lot\" and \"21% of tasks edit a file without reading it first\"."
 )
 
 
@@ -75,19 +76,19 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
         ids[a] = f"n{i}"
 
     L = [
-        "# agentmine — отчёт по процессу агента",
+        "# traceroutine — agent process report",
         "",
         f"_{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}_",
         "",
-        "## Итого",
+        "## Summary",
         "",
         "| | |",
         "|---|---|",
-        f"| Кейсов | {m.n_cases:,} |",
-        f"| Событий | {m.n_events:,} |",
-        f"| Уникальных путей | {len(m.variants):,} |",
-        f"| Токенов | {m.total_tokens:,} |",
-        f"| Стоимость | {_usd(m.total_cost)} |",
+        f"| Cases | {m.n_cases:,} |",
+        f"| Events | {m.n_events:,} |",
+        f"| Distinct paths | {len(m.variants):,} |",
+        f"| Tokens | {m.total_tokens:,} |",
+        f"| Cost | {_usd(m.total_cost)} |",
         f"| Rework rate | {m.rework_rate:.1%} |",
         "",
     ]
@@ -97,14 +98,14 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
     # к остальным цифрам: это ровное распределение, а не находка.
     # Находки идут ПЕРЕД графиками: дашборд — витамин, находка — обезболивающее.
     if found:
-        L += ["## Что чинить", "",
-              "_Оценки экономии консервативны и **могут пересекаться**: один дорогой "
-              "прогон попадает и в «редкие пути», и в «эскалацию». Складывать их нельзя._",
-              ""]
+        L += ["## What to fix", "",
+              "_Savings estimates are deliberately conservative and **may overlap**: one "
+              "expensive run lands in both \"rare paths\" and \"escalation\". Do not add "
+              "them up._", ""]
         for i, f in enumerate(found, 1):
             head = f"**{i}. {f.title}**"
             if f.impact_usd:
-                head += f" — до {_usd(f.impact_usd)} ({f.share:.0%} бюджета)"
+                head += f" — up to {_usd(f.impact_usd)} ({f.share:.0%} of budget)"
             L += [head, "", f.detail, ""]
             for e in f.evidence:
                 L.append(f"- {e}")
@@ -123,13 +124,13 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
             if acc_cost >= 0.8:
                 if acc_cases <= 0.35:
                     L += [
-                        f"> **{acc_cases:.0%} прогонов дают 80% расходов.** "
-                        f"Стоимость — свойство траектории, а не запроса.",
+                        f"> **{acc_cases:.0%} of runs account for 80% of spend.** "
+                        f"Cost is a property of the trajectory, not of the request.",
                         "",
                     ]
                 break
 
-    L += ["## Граф процесса", "", "```mermaid", "flowchart TD"]
+    L += ["## Process graph", "", "```mermaid", "flowchart TD"]
     L.append(f'    {ids[START]}(["▶ start"])')
     for a in order:
         s = m.nodes[a]
@@ -152,12 +153,13 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
 
     if len(m.nodes) > max_nodes:
         L += [
-            f"_Показаны {max_nodes} из {len(m.nodes)} активностей "
-            f"(mermaid нечитаем на большем). Полный граф — в HTML-отчёте._",
+            f"_Showing {max_nodes} of {len(m.nodes)} activities (mermaid is unreadable "
+            f"beyond that). The full graph is in the HTML report._",
             "",
         ]
 
-    L += ["## Самые дорогие пути", "", "| Доля кейсов | Всего | В среднем | Шагов | Ошибки | Путь |",
+    L += ["## Most expensive paths", "",
+          "| Share of cases | Total | Average | Steps | Errors | Path |",
           "|---:|---:|---:|---:|---:|---|"]
     for v in m.top_variants(10):
         share = v.n / m.n_cases if m.n_cases else 0
@@ -169,19 +171,19 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
     L.append("")
 
     if m.resource_cost:
-        L += ["## Расход по ресурсам", "",
-              "Модель — ресурс, а не шаг процесса: в графе все вызовы это одна активность, "
-              "а цена у них разная.", "",
-              "| Ресурс | Вызовов | Токенов | Стоимость | Доля |", "|---|---:|---:|---:|---:|"]
+        L += ["## Spend by resource", "",
+              "A model is a resource, not a process step: in the graph every call is one "
+              "activity, but they are not priced alike.", "",
+              "| Resource | Calls | Tokens | Cost | Share |", "|---|---:|---:|---:|---:|"]
         for name, r in sorted(m.resource_cost.items(), key=lambda kv: -kv[1]["cost"]):
             share = r["cost"] / m.total_cost if m.total_cost else 0
             L.append(f"| `{name}` | {r['n']:,} | {r['tokens']:,} | {_usd(r['cost'])} | {share:.1%} |")
         L.append("")
 
     if m.loop_cost:
-        L += ["## Повторы — цена циклов", "",
-              "Активности, выполнявшиеся в одном кейсе более одного раза.", "",
-              "| Активность | Стоимость повторов |", "|---|---:|"]
+        L += ["## Repeats — the price of loops", "",
+              "Activities executed more than once within a single case.", "",
+              "| Activity | Cost of repeats |", "|---|---:|"]
         for a, c in sorted(m.loop_cost.items(), key=lambda kv: -kv[1])[:10]:
             L.append(f"| `{a}` | {_usd(c)} |")
         L.append("")
@@ -262,8 +264,8 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
         for n, r in sorted(m.resource_cost.items(), key=lambda kv: -kv[1]["cost"])
     )
     res_block = (
-        "<h2>Расход по ресурсам</h2><div class=scroll><table>"
-        "<tr><th>Ресурс</th><th>Вызовов</th><th>Токенов</th><th>Стоимость</th><th>Доля</th></tr>"
+        "<h2>Spend by resource</h2><div class=scroll><table>"
+        "<tr><th>Resource</th><th>Calls</th><th>Tokens</th><th>Cost</th><th>Share</th></tr>"
         f"{res_rows}</table></div>" if res_rows else ""
     )
     find_block = ""
@@ -276,7 +278,7 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
             + "</div>"
             for i, f in enumerate(found, 1)
         )
-        find_block = f"<h2>Что чинить</h2><div class=finds>{cards}</div>"
+        find_block = f"<h2>What to fix</h2><div class=finds>{cards}</div>"
     steps = "".join(
         f'<div class=st><code>{html.escape(cmd)}</code><span>{html.escape(why)}</span></div>'
         for cmd, why in NEXT_STEPS
@@ -286,14 +288,14 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
         f"{steps}<p class=nt>{html.escape(NEXT_TAIL.replace(chr(96), ''))}</p></div>"
     )
     stats = {
-        "Кейсов": f"{m.n_cases:,}", "Событий": f"{m.n_events:,}",
-        "Путей": f"{len(m.variants):,}", "Токенов": f"{m.total_tokens:,}",
-        "Стоимость": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
+        "Cases": f"{m.n_cases:,}", "Events": f"{m.n_events:,}",
+        "Paths": f"{len(m.variants):,}", "Tokens": f"{m.total_tokens:,}",
+        "Cost": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
     }
     tiles = "".join(f'<div class=t><b>{v}</b><span>{k}</span></div>' for k, v in stats.items())
 
     return f"""<!doctype html><html lang=ru><meta charset=utf-8>
-<title>agentmine — отчёт</title><meta name=viewport content="width=device-width,initial-scale=1">
+<title>traceroutine — agent process report</title><meta name=viewport content="width=device-width,initial-scale=1">
 <style>
 :root{{--bg:#fff;--fg:#18181b;--mut:#71717a;--line:#e4e4e7;--edge:#a1a1aa;
 --cool:#f4f4f5;--warm:#fde68a;--hot:#fca5a5;--card:#fafafa;--accent:#b4322e}}
@@ -334,79 +336,79 @@ border-top:1px solid var(--line)}}
 .st code{{background:var(--cool);padding:3px 7px;border-radius:5px;white-space:nowrap}}
 .st span{{color:var(--mut);font-size:12px}}
 </style>
-<h1>agentmine</h1><div class=sub>{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} · вертикальный срез (Ц1)</div>
+<h1>traceroutine</h1><div class=sub>{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>
 <div class=tiles>{tiles}</div>
 {find_block}
 {next_block}
-<h2>Граф процесса</h2>
+<h2>Process graph</h2>
 <div class=scroll><svg width="{w}" height="{h}" viewBox="0 0 {w} {h}">
 <defs><marker id=a markerWidth=8 markerHeight=8 refX=7 refY=3 orient=auto>
 <path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"/></marker></defs>{''.join(svg)}</svg></div>
-<h2>Самые дорогие пути</h2>
-<div class=scroll><table><tr><th>Доля</th><th>Всего</th><th>Средн.</th><th>Шагов</th><th>Путь</th></tr>
+<h2>Most expensive paths</h2>
+<div class=scroll><table><tr><th>Share</th><th>Total</th><th>Avg</th><th>Steps</th><th>Path</th></tr>
 {rows}</table></div>
 {res_block}
 </html>"""
 
 
-def render_drift(d: Drift, *, name_a: str = "до", name_b: str = "после") -> str:
+def render_drift(d: Drift, *, name_a: str = "before", name_b: str = "after") -> str:
     def pct(v: float) -> str:
         return f"{v:+.1%}" if v else "0"
 
     L = [
-        "# agentmine — сравнение процессов", "",
+        "# traceroutine — process comparison", "",
         f"_{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}_", "",
         "| | " + name_a + " | " + name_b + " | Δ |", "|---|---:|---:|---:|",
-        f"| Стоимость прогона | {_usd(d.cost_per_case_before)} | "
+        f"| Cost per run | {_usd(d.cost_per_case_before)} | "
         f"{_usd(d.cost_per_case_after)} | **{pct(d.cost_change)}** |",
-        f"| Шагов в прогоне | {d.len_before:.1f} | {d.len_after:.1f} | {pct(d.len_change)} |",
-        f"| Уникальных путей | {d.variants_before} | {d.variants_after} | "
+        f"| Steps per run | {d.len_before:.1f} | {d.len_after:.1f} | {pct(d.len_change)} |",
+        f"| Distinct paths | {d.variants_before} | {d.variants_after} | "
         f"{d.variants_after - d.variants_before:+d} |",
         "",
     ]
     if d.cost_change > 0.1:
-        L += [f"> Прогон подорожал на {d.cost_change:.0%}. "
-              f"Смотрите, какие шаги стали встречаться чаще.", ""]
+        L += [f"> A run got {d.cost_change:.0%} more expensive. "
+              f"Look at which steps became more frequent.", ""]
     elif d.cost_change < -0.1:
-        L += [f"> Прогон подешевел на {abs(d.cost_change):.0%}.", ""]
+        L += [f"> A run got {abs(d.cost_change):.0%} cheaper.", ""]
 
     if d.activity_delta:
-        L += ["## Частота активностей", "",
-              "Сколько раз активность встречается в среднем прогоне.", "",
-              f"| Активность | {name_a} | {name_b} | Δ |", "|---|---:|---:|---:|"]
+        L += ["## Activity frequency", "",
+              "How many times an activity occurs in an average run.", "",
+              f"| Activity | {name_a} | {name_b} | Δ |", "|---|---:|---:|---:|"]
         for k, a, b in d.activity_delta:
             L.append(f"| `{k}` | {a:.2f} | {b:.2f} | {b - a:+.2f} |")
         L.append("")
-    L += ["## Изменения в графе", ""]
+    L += ["## Graph changes", ""]
     if d.new_edges or d.gone_edges:
-        L.append("Новый переход — это новый вид поведения агента.")
+        L.append("A new edge means a new kind of agent behaviour.")
         L.append("")
         for x, y, n in d.new_edges:
-            L.append(f"- **появился** `{x} → {y}` ×{n}")
+            L.append(f"- **appeared** `{x} → {y}` ×{n}")
         for x, y, n in d.gone_edges:
-            L.append(f"- исчез `{x} → {y}` ×{n}")
+            L.append(f"- gone `{x} → {y}` ×{n}")
     else:
         # Отсутствие структурных изменений — это не пустота, а вывод: агент не
         # научился новому поведению, он делает то же самое, но больше.
-        L.append("**Структура процесса не изменилась** — ни один переход не появился и "
-                 "не исчез. Агент делает то же самое, просто больше: смотрите частоты "
-                 "активностей выше.")
+        L.append("**The process structure did not change** — not one edge appeared or "
+                 "disappeared. The agent is doing the same things, just more of them: "
+                 "see the activity frequencies above.")
     L.append("")
 
     if d.enumerable:
         if d.appeared:
-            L += ["## Появились пути", ""] + [
+            L += ["## Paths that appeared", ""] + [
                 f"- `{_path_digest(s)}` ×{n}" for s, n in d.appeared] + [""]
         if d.vanished:
-            L += ["## Исчезли пути", ""] + [
+            L += ["## Paths that disappeared", ""] + [
                 f"- `{_path_digest(s)}` ×{n}" for s, n in d.vanished] + [""]
     else:
-        L += [f"_Отдельные траектории не перечисляются: вариантов "
+        L += [f"_Individual trajectories are not listed: "
               f"{max(d.variants_before, d.variants_after)}. "
-              + ("Пути при этом повторяются "
-                 f"({d.reuse:.0%} прогонов), поэтому переходы выше — надёжный сигнал._"
+              + ("Paths do repeat here "
+                 f"({d.reuse:.0%} of runs), so the edges above are a reliable signal._"
                  if d.reuse >= 0.5 else
-                 "Почти каждый прогон уникален, поэтому смотреть надо на переходы._"),
+                 "Almost every run is unique, so look at the edges instead._"),
               ""]
     return "\n".join(L)
 
@@ -422,38 +424,38 @@ def render_check(rep: "CheckReport", m: Model, *, max_nodes: int = 18,
     """
     p = rep.process
     L = [f"{'✅' if rep.ok else '❌'} **{p.name}** — "
-         + ("процесс соответствует объявленному" if rep.ok
-            else f"нарушений: {len(rep.failures)}"),
+         + ("the process matches what was declared" if rep.ok
+            else f"{len(rep.failures)} violation(s)"),
          ""]
 
     if rep.failures:
-        L += ["| | Нарушено |", "|---|---|"]
+        L += ["| | Violated |", "|---|---|"]
         L += [f"| ❌ | {f} |" for f in rep.failures]
         L.append("")
 
     t = p.thresholds
-    rows = [("Прогонов", f"{rep.n_cases:,}", ""),
-            ("Стоимость", _usd(rep.total_cost), "")]
+    rows = [("Runs", f"{rep.n_cases:,}", ""),
+            ("Cost", _usd(rep.total_cost), "")]
     if rep.fitness is not None:
         rows.append(("Fitness", f"{rep.fitness:.3f}",
                      f"≥ {t.fitness_min:.3f}" if t.fitness_min is not None else ""))
-        rows.append(("Прогонов без отклонений", f"{rep.conforming_share:.1%} "
+        rows.append(("Runs with no deviation", f"{rep.conforming_share:.1%} "
                      f"({rep.fitting}/{rep.n_cases})", ""))
-    rows.append(("$ на прогон", f"${rep.usd_per_case:.4f}",
+    rows.append(("$ per run", f"${rep.usd_per_case:.4f}",
                  f"≤ ${t.usd_per_case_max:.4f}" if t.usd_per_case_max is not None else ""))
-    rows.append(("Шагов, p95", f"{rep.steps_p95:.0f}",
+    rows.append(("Steps, p95", f"{rep.steps_p95:.0f}",
                  f"≤ {t.steps_p95_max:.0f}" if t.steps_p95_max is not None else ""))
     if rep.fitness is not None:
-        rows.append(("Бюджет вне модели",
+        rows.append(("Off-model budget",
                      f"{_usd(rep.off_model_cost)} ({rep.off_model_share:.1%})",
                      f"≤ {t.off_model_share_max:.1%}"
                      if t.off_model_share_max is not None else ""))
-    L += ["| Метрика | Значение | Порог |", "|---|---:|---:|"]
+    L += ["| Metric | Value | Threshold |", "|---|---:|---:|"]
     L += [f"| {a} | {b} | {c} |" for a, b, c in rows]
     L.append("")
 
     if rep.rules:
-        L += ["## Правила", "", "| | Правило | Прогонов | Случаев | Стоимость |",
+        L += ["## Rules", "", "| | Rule | Runs | Occurrences | Cost |",
               "|---|---|---:|---:|---:|"]
         for st in rep.rules:
             ok = st.ok(rep.n_cases)
@@ -464,16 +466,15 @@ def render_check(rep: "CheckReport", m: Model, *, max_nodes: int = 18,
         L.append("")
 
     if rep.deviations:
-        L += ["## Карта отклонений", "",
-              "_«Лишний» — агент сделал шаг, которого нет в модели; его стоимость "
-              "и есть цена отклонения. «Пропущен» — модель требовала шаг, которого "
-              "не случилось: денег ему не приписываем. Шаг с прочерком не бесплатен: "
-              "вызов инструмента стоит $0 сам по себе, но его результат перечитывается "
-              "на каждом следующем ходе — это видно в находке про раздувание контекста._",
-              "",
-              "| | Шаг | Раз | Прогонов | Стоимость |", "|---|---|---:|---:|---:|"]
+        L += ["## Deviation map", "",
+              "_\"Extra\" — the agent took a step the model does not contain; its cost "
+              "is the price of the deviation. \"Missing\" — the model required a step "
+              "that never happened: no money is attributed to it. A dash does not mean "
+              "free: a tool call costs $0 by itself, but its result is re-read on every "
+              "later turn — see the context inflation finding._", "",
+              "| | Step | Times | Runs | Cost |", "|---|---|---:|---:|---:|"]
         for d in rep.deviations[:12]:
-            kind = "лишний" if d.kind == "log" else "пропущен"
+            kind = "extra" if d.kind == "log" else "missing"
             L.append(f"| {kind} | `{_cell(d.activity)}` | {d.n} | {d.cases} | "
                      f"{_usd(d.cost) if d.cost else '—'} |")
         L.append("")
@@ -484,8 +485,8 @@ def render_check(rep: "CheckReport", m: Model, *, max_nodes: int = 18,
         ids = {START: "S", END: "E"}
         for i, a in enumerate(order):
             ids[a] = f"n{i}"
-        L += ["## Наблюдаемый процесс", "",
-              "_Красным — активности, которых нет в объявленной модели._", "",
+        L += ["## Observed process", "",
+              "_Red marks activities that are not in the declared model._", "",
               "```mermaid", "flowchart TD", f'    {ids[START]}(["▶ start"])']
         for a in order:
             st = m.nodes[a]

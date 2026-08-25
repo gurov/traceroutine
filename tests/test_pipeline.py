@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from agentmine.adapters.otlp import OtlpAdapter, _unwrap
-from agentmine.mine import mine
-from agentmine.model import RawSpan
-from agentmine.normalize import normalize
-from agentmine.pricing import Pricing
-from agentmine.store import read, write
+from traceroutine.adapters.otlp import OtlpAdapter, _unwrap
+from traceroutine.mine import mine
+from traceroutine.model import RawSpan
+from traceroutine.normalize import normalize
+from traceroutine.pricing import Pricing
+from traceroutine.store import read, write
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,7 +91,7 @@ def test_tools_do_not_trigger_unknown_model_warning():
 
 def test_pareto_sorted_by_per_case_cost():
     """РЕГРЕССИЯ: сортировка по суммарной стоимости отвечала не на тот вопрос."""
-    from agentmine.mine import Model, Variant
+    from traceroutine.mine import Model, Variant
     m = Model(n_cases=110, total_cost=200.0)
     m.variants = [Variant(("cheap",), n=100, cost=100.0),
                   Variant(("pricey",), n=10, cost=100.0)]
@@ -116,7 +116,7 @@ def test_known_pathologies_are_found(events):
 
 
 def test_reports_render(events, tmp_path):
-    from agentmine.report import render_html, render_markdown
+    from traceroutine.report import render_html, render_markdown
     m = mine(events)
     md, html_ = render_markdown(m), render_html(m)
     assert "```mermaid" in md and "flowchart TD" in md
@@ -127,8 +127,8 @@ def test_reports_render(events, tmp_path):
 
 def test_mermaid_labels_are_escaped():
     """Кавычки и скобки в имени активности ломают mermaid-разметку."""
-    from agentmine.mine import Model
-    from agentmine.report import render_markdown
+    from traceroutine.mine import Model
+    from traceroutine.report import render_markdown
     m = Model(n_cases=1, n_events=1, total_cost=1.0)
     m.nodes = {'tool:f(a="b")': {"n": 1, "cost": 1.0, "duration": 0.0, "errors": 0, "tokens": 1}}
     out = render_markdown(m)
