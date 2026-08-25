@@ -6,8 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-# TODO перед публикацией: подставить настоящее имя.
-authors = [{name = "Pavel", email = "lucius.gu@gmail.com"}]
+authors = [{name = "Pavel Gurov", email = "lucius.gu@gmail.com"}]
 keywords = [
     "process-mining", "llm", "agents", "observability", "opentelemetry",
     "conformance-checking", "tracing", "llmops", "claude-code",
@@ -36,11 +35,10 @@ dependencies = [
 # и чисто детерминированный пути работают без него, а лишний вес ломает `uvx`.
 anthropic = ["anthropic>=0.40"]
 
-# TODO перед публикацией: заменить OWNER на свой github-аккаунт.
 [project.urls]
-Homepage = "https://github.com/OWNER/traceroutine"
-Repository = "https://github.com/OWNER/traceroutine"
-Issues = "https://github.com/OWNER/traceroutine/issues"
+Homepage = "https://github.com/gurov/traceroutine"
+Repository = "https://github.com/gurov/traceroutine"
+Issues = "https://github.com/gurov/traceroutine/issues"
 
 [project.scripts]
 traceroutine = "traceroutine.cli:app"

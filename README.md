@@ -47,7 +47,7 @@ Synthetic traces with deliberately planted pathologies — a retrieval loop, an
 escalation to an expensive model, a long tail of rare paths:
 
 ```bash
-git clone https://github.com/OWNER/traceroutine && cd traceroutine
+git clone https://github.com/gurov/traceroutine && cd traceroutine
 uv pip install -e .
 python examples/gen_otlp.py examples/traces.json
 
@@ -169,7 +169,7 @@ and a failed check need different reactions, and CI only sees the code.
 deviation graph — to `$GITHUB_STEP_SUMMARY`, and its metrics to `$GITHUB_OUTPUT`.
 
 ```yaml
-- uses: OWNER/traceroutine@v1
+- uses: gurov/traceroutine@v1
   with: {traces: traces/, process: process.yaml, case: session}
 ```
 
