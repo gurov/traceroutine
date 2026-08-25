@@ -245,6 +245,28 @@ def test_unseen_activity_warns():
     assert any("never seen in the log" in w for w in rep.warnings)
 
 
+def test_raw_log_against_canonical_model_is_a_config_error():
+    """Разрыв, в который упирается всякий, кто идёт по README подряд: quickstart
+    не звал `abstract`, в логе `chat:claude-opus-5`, в модели `chat`. Раньше это
+    давало стену красного, где ни одна строка не верна. Теперь — код 2."""
+    with pytest.raises(ConfigError) as exc:
+        check(proc(flow="chat -> tool:Read -> chat", rules=[{"last": "chat"}]),
+              seq("c1", ["chat:claude-opus-5", "tool:Read", "chat:claude-opus-5"]))
+    assert "different abstraction levels" in str(exc.value)
+    assert "chat:claude-opus-5" in str(exc.value)
+    assert "traceroutine abstract" in str(exc.value)
+
+
+def test_genuinely_absent_activity_still_only_warns():
+    """Отличать от честного «активности не случилось» обязательно: `tool:Glob`
+    объявлен и в логе не встретился — это предупреждение, а не ошибка конфига,
+    иначе проверка падала бы на любом прогоне, где агент не трогал часть
+    инструментов."""
+    rep = check(proc(rules=[{"never": "tool:Glob"}]), seq("c1", ["chat", "tool:Read"]))
+    assert rep.unseen == ["tool:Glob"]
+    assert any("never seen in the log" in w for w in rep.warnings)
+
+
 def test_p95_is_not_the_mean():
     """Средняя длина прячет ровно то, ради чего порог и ставят, — убежавшие прогоны.
     Здесь 90 прогонов по шагу и 10 по полсотни: среднее ~5.9, p95 — 50."""
@@ -428,6 +450,34 @@ def test_cli_exits_2_on_broken_config(tmp_path):
     pr.write_text("flow: 'plan -> (respond'\n", encoding="utf-8")
     res = _run("check", ev_path, "-p", pr)
     assert res.exit_code == 2
+
+
+def test_cli_exits_2_when_log_was_not_abstracted(tmp_path, monkeypatch):
+    """Тот же код 2, но обнаруживается только на данных: yaml разобран, а
+    сравнивать его не с чем — в логе `chat:claude-opus-5`, в модели `chat`.
+
+    chdir обязателен: словарь подхватывается из рабочего каталога, и без этого
+    тест зависел бы от того, лежит ли в корне репозитория чей-то artefact.
+    """
+    monkeypatch.chdir(tmp_path)
+    ev_path = _events(tmp_path, [["chat:claude-opus-5", "tool:Read"]])
+    pr = _process(tmp_path, {"flow": "chat -> tool:Read"})
+    res = _run("check", ev_path, "-p", pr)
+    assert res.exit_code == 2
+    assert "abstraction levels" in res.output
+
+
+def test_cli_picks_up_the_vocabulary_lying_next_to_it(tmp_path, monkeypatch):
+    """`abstract` пишет в activity_map.yaml, а `check` его игнорировал без `-m`:
+    словарь построен, проверка идёт по сырым меткам. Подхватываем — и говорим об
+    этом вслух."""
+    monkeypatch.chdir(tmp_path)
+    ev_path = _events(tmp_path, [["chat:claude-opus-5", "tool:Read"]])
+    assert _run("abstract", ev_path, "--backend", "none").exit_code == 0
+    pr = _process(tmp_path, {"flow": "chat -> tool:Read"})
+    res = _run("check", ev_path, "-p", pr)
+    assert res.exit_code == 0, res.output
+    assert "vocabulary activity_map.yaml" in res.output
 
 
 def test_cli_warn_only_never_fails(tmp_path):

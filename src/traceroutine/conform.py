@@ -44,6 +44,7 @@ from typing import Any
 
 import yaml
 
+from .abstract import canonical
 from .analyze import Finding
 from .store import cases
 
@@ -613,6 +614,7 @@ def check(process: Process, events: list[dict],
     # либо несовпадение уровня абстракции (в модели `act`, в логе `tool:Bash`) —
     # и тогда проверка формально проходит, ничего не проверив.
     rep.unseen = sorted(process.activities() - seen)
+    _reject_level_mismatch(rep.unseen, seen)
     if rep.unseen:
         rep.warnings.append(
             f"declared but never seen in the log: {', '.join(rep.unseen)}. Check the "
@@ -627,6 +629,39 @@ def check(process: Process, events: list[dict],
 
     _verdict(rep, check(process, baseline) if baseline is not None else None)
     return rep
+
+
+def _reject_level_mismatch(unseen: list[str], seen: set[str]) -> None:
+    """Модель и лог написаны на разных уровнях абстракции — это ошибка конфига.
+
+    Тот самый разрыв, в который упирается всякий, кто идёт по README подряд:
+    quickstart не звал `abstract`, поэтому в логе `chat:claude-opus-5`, а в
+    модели `chat`. Проверка при этом не падает — она выдаёт стену красного,
+    где ни одна строка не верна: `last: chat` нарушен в 100% прогонов, вне
+    модели 100% бюджета, fitness 0.391 вместо 0.898.
+
+    Отличаем от честного «активности не случилось» строго: сообщаем, только
+    если в логе есть метка, которая канонизируется РОВНО в объявленную. Тогда
+    сравнивать было не с чем не потому, что агент так себя вёл, а потому что
+    имена не совпали, — и мы можем сказать, что именно набрать.
+    """
+    hints = []
+    for a in unseen:
+        found = sorted(s for s in seen if s != a and canonical(s) == a)
+        if found:
+            shown = ", ".join(f"`{f}`" for f in found[:3])
+            hints.append(f"`{a}` — the log has {shown}"
+                         + (f" and {len(found) - 3} more" if len(found) > 3 else ""))
+    if not hints:
+        return
+    raise ConfigError(
+        "process.yaml and the log are at different abstraction levels:\n  "
+        + "\n  ".join(hints)
+        + "\nNothing is compared against those names, so fitness and the deviation "
+          "map would both be fiction. Build the vocabulary and pass it in:\n"
+          "  traceroutine abstract <log> -m activity_map.yaml\n"
+          "  traceroutine check <log> -p <process.yaml> -m activity_map.yaml"
+    )
 
 
 def _verdict(rep: CheckReport, base: "CheckReport | None") -> None:

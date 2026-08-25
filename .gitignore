@@ -10,3 +10,7 @@ examples/traces.json
 
 # сгенерированный демо-словарь; в СВОЁМ проекте его наоборот коммитят
 activity_map.yaml
+# ...но курируемый словарь примера — часть репозитория, без него демо из README
+# в свежем клоне даёт «vocabulary: 0 activities» и fitness 0.000. Правило выше
+# не имеет слеша, поэтому ловило и examples/ тоже.
+!examples/activity_map.yaml

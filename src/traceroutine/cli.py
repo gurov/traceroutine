@@ -58,6 +58,22 @@ def ingest(
                     fg=typer.colors.YELLOW)
 
 
+MAP_DEFAULT = Path("activity_map.yaml")
+
+
+def _vocabulary(map_path: Optional[Path]) -> Optional[Path]:
+    """Словарь, лежащий рядом, подхватывается сам.
+
+    `abstract` по умолчанию пишет в activity_map.yaml, а `report` и `check`
+    молча его игнорировали, пока не передашь `-m`. Ровно в этот зазор упирался
+    всякий, кто шёл по README подряд: словарь построен, а проверка идёт по
+    сырым меткам. Подхват не молчаливый — о нём печатается строка.
+    """
+    if map_path is not None:
+        return map_path
+    return MAP_DEFAULT if MAP_DEFAULT.exists() else None
+
+
 def _backend(kind: str, model: str | None, batch: bool):
     if kind == "anthropic":
         return AnthropicBackend(model or MODEL_DEFAULT, batch=batch)
@@ -143,17 +159,19 @@ def report(
     out: Optional[Path] = typer.Option(None, "-o", "--out"),
     fmt: str = typer.Option("html", "-f", "--format", help="html | md"),
     max_nodes: int = typer.Option(0, "--max-nodes", help="0 = format default"),
-    map_path: Optional[Path] = typer.Option(None, "-m", "--map", help="activity vocabulary"),
+    map_path: Optional[Path] = typer.Option(None, "-m", "--map", exists=True,
+                                            help="activity vocabulary"),
     process: Optional[Path] = typer.Option(None, "-p", "--process",
                                            help="process.yaml: how the agent is supposed to work"),
 ):
     """Event log to a report."""
     evs = read(events)
+    map_path = _vocabulary(map_path)
     if map_path:
         amap = ActivityMap.load(map_path)
         for e in evs:
             e["activity"] = amap.activity(e["activity_raw"])
-        typer.echo(f"vocabulary applied: {len(set(amap.mapping.values()))} activities "
+        typer.echo(f"vocabulary {map_path}: {len(set(amap.mapping.values()))} activities "
                    f"({amap.backend})")
     m = mine(evs)
     found = findings(m, evs)
@@ -214,7 +232,7 @@ def check(
     events: Path = typer.Argument(Path("events.parquet"), exists=True),
     process: Path = typer.Option(..., "-p", "--process", exists=True,
                                  help="process.yaml: how the agent is supposed to work"),
-    map_path: Optional[Path] = typer.Option(None, "-m", "--map"),
+    map_path: Optional[Path] = typer.Option(None, "-m", "--map", exists=True),
     baseline: Optional[Path] = typer.Option(None, "--baseline", exists=True,
                                             help="the \"before\" log, enabling growth thresholds"),
     out: Optional[Path] = typer.Option(None, "-o", "--out", help="markdown summary"),
@@ -232,16 +250,25 @@ def check(
     except ConfigError as exc:
         raise typer.Exit(_fail(exc)) from exc
 
+    vocab = _vocabulary(map_path)
+    if vocab:
+        typer.echo(f"vocabulary {vocab}")
+
     def load(p: Path) -> list[dict]:
         evs = read(p)
-        if map_path:
-            amap = ActivityMap.load(map_path)
+        if vocab:
+            amap = ActivityMap.load(vocab)
             for e in evs:
                 e["activity"] = amap.activity(e["activity_raw"])
         return evs
 
     evs = load(events)
-    rep = run_check(proc, evs, baseline=load(baseline) if baseline else None)
+    try:
+        rep = run_check(proc, evs, baseline=load(baseline) if baseline else None)
+    except ConfigError as exc:
+        # Несовпадение уровня абстракции видно только на данных, а не при разборе
+        # yaml, — но это по-прежнему ошибка конфига, то есть код 2, а не 1.
+        raise typer.Exit(_fail(exc)) from exc
 
     head = "OK" if rep.ok else "VIOLATED"
     typer.secho(
@@ -284,9 +311,13 @@ def diff(
     before: Path = typer.Argument(..., exists=True),
     after: Path = typer.Argument(..., exists=True),
     out: Path = typer.Option(Path("drift.md"), "-o", "--out"),
-    map_path: Optional[Path] = typer.Option(None, "-m", "--map"),
+    map_path: Optional[Path] = typer.Option(None, "-m", "--map", exists=True),
 ):
     """Compare two logs: what changed after a model swap or a prompt release."""
+    map_path = _vocabulary(map_path)
+    if map_path:
+        typer.echo(f"vocabulary {map_path}")
+
     def load(p: Path):
         evs = read(p)
         if map_path:
