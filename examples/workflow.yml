@@ -1,0 +1,39 @@
+# Example: check the agent on every pull request.
+#
+# The point is not to measure cost — any dashboard shows that. The point is to
+# catch a BEHAVIOURAL REGRESSION before merge: the agent started taking another
+# path, stopped verifying itself, began looping. A model swap or a prompt edit
+# breaks exactly this, and no unit test sees it.
+#
+# Copy this file to .github/workflows/ in your own repository.
+name: traceroutine
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Your step goes here: run the agent over a reference set of tasks and
+      # drop the traces into ./traces. Without it there is nothing to check.
+      - name: Run the agent suite
+        run: ./scripts/run-agent-suite.sh --out traces/
+
+      - id: traceroutine
+        uses: gurov/traceroutine@v1
+        with:
+          traces: traces/
+          process: process.yaml
+          case: session
+          # The baseline log from main enables "no worse than before" thresholds.
+          # Keeping it as an artifact of the last main build works well.
+          # baseline: baseline/events.parquet
+
+      # The summary, with a mermaid deviation graph, is written to the job
+      # summary by the action itself.
+      - if: always()
+        run: echo "fitness=${{ steps.traceroutine.outputs.fitness }} · ${{ steps.traceroutine.outputs.usd-per-case }}/run"

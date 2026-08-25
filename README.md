@@ -273,6 +273,8 @@ deviation graph — to `$GITHUB_STEP_SUMMARY`, and its metrics to `$GITHUB_OUTPU
   with: {traces: traces/, process: process.yaml, case: session}
 ```
 
+A complete workflow to copy is in [`examples/workflow.yml`](examples/workflow.yml).
+
 With `--baseline` you also get "no worse than before" thresholds: cost per run, run
 length, fitness drop. Absolute thresholds need re-tuning after every release; relative
 ones do not.

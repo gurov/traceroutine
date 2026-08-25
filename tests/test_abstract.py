@@ -139,6 +139,14 @@ def test_stability_detects_disagreement():
 # параметры запроса. budget_tokens и prefill на Opus 5 дают 400.
 
 def test_anthropic_request_shape():
+    # `anthropic` — необязательный extra, и без него тест патчить нечего.
+    # Пропуск, а не падение, и обязательно ВНУТРИ функции: на уровне модуля
+    # importorskip снял бы весь файл, а остальным тестам anthropic не нужен.
+    # `pip install traceroutine` без extras должен давать зелёный прогон, иначе
+    # первый же контрибьютор решит, что репозиторий сломан. В CI extra ставится
+    # явно, чтобы тест всё-таки исполнялся.
+    pytest.importorskip("anthropic",
+                        reason="optional extra: pip install traceroutine[anthropic]")
     from traceroutine.abstract import AnthropicBackend
 
     fake = MagicMock()

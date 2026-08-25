@@ -1,48 +1,48 @@
 name: 'traceroutine check'
-description: 'Проверить трейсы LLM-агента на соответствие объявленному процессу и порогам стоимости'
-author: 'traceroutine'
+description: 'Check LLM agent traces against a declared process and cost thresholds'
+author: 'Pavel Gurov'
 branding: {icon: 'git-branch', color: 'red'}
 
 inputs:
   traces:
-    description: 'Файл или папка с трейсами (OTLP JSON, транскрипты Claude Code, чат-транскрипты)'
+    description: 'File or directory of traces (OTLP JSON, Claude Code transcripts, chat transcripts)'
     required: true
   process:
-    description: 'process.yaml — как агент должен работать'
+    description: 'process.yaml — how the agent is supposed to work'
     required: false
     default: 'process.yaml'
   adapter:
-    description: 'Формат трейсов; по умолчанию определяется сам'
+    description: 'Trace format; detected automatically by default'
     required: false
     default: ''
   case:
-    description: 'Case notion: trace | session | task | attr:<имя>'
+    description: 'Case notion: trace | session | task | attr:<name>'
     required: false
     default: 'trace'
   map:
-    description: 'activity_map.yaml — словарь активностей (тот же, что в отчётах)'
+    description: 'activity_map.yaml — the activity vocabulary, the same one the reports use'
     required: false
     default: ''
   baseline:
-    description: 'events.parquet «как было» — включает пороги на рост стоимости и просадку fitness'
+    description: 'The "before" events.parquet — enables growth thresholds on cost and fitness drop'
     required: false
     default: ''
   warn-only:
-    description: 'Не валить сборку при нарушениях (режим приручения порогов)'
+    description: 'Do not fail the build on violations — for taming thresholds'
     required: false
     default: 'false'
   install:
-    description: 'Что ставить: имя пакета, спецификатор версии или git+https://…'
+    description: 'What to install: a package name, a version specifier, or git+https://…'
     required: false
     default: 'traceroutine'
 
 outputs:
-  status:          {description: 'ok | failed',                          value: '${{ steps.check.outputs.status }}'}
-  fitness:         {description: 'Соответствие объявленному flow, 0…1',  value: '${{ steps.check.outputs.fitness }}'}
-  conforming:      {description: 'Доля прогонов без отклонений',         value: '${{ steps.check.outputs.conforming }}'}
-  usd-per-case:    {description: 'Стоимость одного прогона, $',          value: '${{ steps.check.outputs.usd-per-case }}'}
-  off-model-share: {description: 'Доля бюджета на шагах вне модели',     value: '${{ steps.check.outputs.off-model-share }}'}
-  failures:        {description: 'Сколько порогов нарушено',             value: '${{ steps.check.outputs.failures }}'}
+  status:          {description: 'ok | failed',                              value: '${{ steps.check.outputs.status }}'}
+  fitness:         {description: 'Conformance to the declared flow, 0…1',    value: '${{ steps.check.outputs.fitness }}'}
+  conforming:      {description: 'Share of runs with no deviation',          value: '${{ steps.check.outputs.conforming }}'}
+  usd-per-case:    {description: 'Cost of a single run, $',                  value: '${{ steps.check.outputs.usd-per-case }}'}
+  off-model-share: {description: 'Share of budget spent off-model',          value: '${{ steps.check.outputs.off-model-share }}'}
+  failures:        {description: 'How many thresholds were violated',        value: '${{ steps.check.outputs.failures }}'}
 
 # Значения входов НИГДЕ не подставляются прямо в текст `run:` — только через env.
 # Иначе трейсы или имя файла, пришедшие из PR, попадают в командную строку раннера:

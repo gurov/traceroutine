@@ -1,0 +1,44 @@
+# Собственный CI репозитория: тесты на всех объявленных версиях Python.
+# Нижняя граница — не формальность: вложенные одинаковые кавычки в f-string
+# работают только с 3.12 (PEP 701), и ровно этот дефект уже проезжал незамеченным
+# при объявленном requires-python >=3.10.
+name: tests
+
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # extra anthropic ставится явно: без него тест формы запроса к бэкенду
+      # молча пропускается, а он ровно тот, что ломается от смены SDK.
+      - run: uv run --python ${{ matrix.python }} --extra anthropic --with pytest pytest -q
+
+  quickstart:
+    # Демо из README прогоняется целиком: именно оно ломалось незаметно,
+    # когда .gitignore съел examples/activity_map.yaml, а зелёные тесты
+    # этого не видели — они не ходят через README.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          uv run python examples/gen_otlp.py examples/traces.json
+          uv run traceroutine ingest examples/traces.json -o events.parquet
+          uv run traceroutine report events.parquet -f md -m examples/activity_map.yaml
+          # README обещает, что эта команда возвращает ровно 1: нарушения есть.
+          # Ни 0 (проверка ничего не нашла), ни 2 (сломан конфиг) не годятся.
+          set +e
+          uv run traceroutine check events.parquet -p examples/process.yaml -m examples/activity_map.yaml
+          code=$?
+          set -e
+          [ "$code" -eq 1 ] || { echo "expected exit 1, got $code"; exit 1; }
