@@ -54,6 +54,30 @@ def _usd(v: float) -> str:
     return f"${v:,.2f}" if v >= 0.01 else f"${v:.4f}"
 
 
+def _node_label(activity: str, stat: dict) -> tuple[str, str]:
+    """Подпись узла: имя и вторая строка.
+
+    Деньги не печатаются, когда их РОВНО ноль. `_usd` даёт `$0.0000` для всего
+    мельче цента, и на графе агента это семь узлов из восьми: инструменты в
+    момент вызова не тратят токенов. Формально верно, читается как «инструмент
+    сломан» — и хоронит саму находку, ради которой граф и рисуют. Ноль на шаге
+    не значит «бесплатно», он значит «плата придёт позже», и об этом говорит
+    строка под графом, а не четыре нуля после точки.
+    """
+    n = f"{stat['n']:,}×"
+    return activity, (f"{n} · {_usd(stat['cost'])}" if stat["cost"] else n)
+
+
+# Подпись под графом. Появляется только когда бесплатные шаги там есть, иначе
+# это шум. Без неё узел без суммы читается как «этот шаг ничего не стоит» —
+# ровно то заблуждение, против которого инструмент и написан.
+FREE_STEPS_NOTE = (
+    "Steps shown without a figure spend no tokens at the moment of the call. "
+    "That is not the same as free: their results stay in the prompt and are "
+    "re-read on every later turn — see context inflation above."
+)
+
+
 def _spine(m: Model, max_nodes: int, min_edge: float) -> tuple[list[str], dict]:
     """Хребет процесса: top-N узлов по стоимости + рёбра выше порога частоты."""
     ranked = sorted(m.nodes.items(), key=lambda kv: -kv[1]["cost"])
@@ -133,9 +157,8 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
     L += ["## Process graph", "", "```mermaid", "flowchart TD"]
     L.append(f'    {ids[START]}(["▶ start"])')
     for a in order:
-        s = m.nodes[a]
-        label = f"{a}<br/>{s['n']}× · {_usd(s['cost'])}"
-        L.append(f'    {ids[a]}["{_mm(label)}"]')
+        name, second = _node_label(a, m.nodes[a])
+        L.append(f'    {ids[a]}["{_mm(name)}<br/>{_mm(second)}"]')
     L.append(f'    {ids[END]}(["■ end"])')
     for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1].n):
         if a in ids and b in ids:
@@ -150,6 +173,8 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
     if err:
         L.append(f"    class {','.join(ids[a] for a in err)} err")
     L += ["```", ""]
+    if any(not m.nodes[a]["cost"] for a in order):
+        L += [f"_{FREE_STEPS_NOTE}_", ""]
 
     if len(m.nodes) > max_nodes:
         L += [
@@ -290,10 +315,11 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
         s = m.nodes[node]
         share = s["cost"] / m.total_cost if m.total_cost else 0
         cls = "hot" if share > 0.15 else ("warm" if share > 0.05 else "cool")
+        name, second = _node_label(node, s)
         svg.append(
             f'<rect x="{x}" y="{y}" width="160" height="52" rx="6" class="node {cls}"/>'
-            f'<text x="{x+80}" y="{y+21}" class="nl">{html.escape(node[:24])}</text>'
-            f'<text x="{x+80}" y="{y+39}" class="ns">{s["n"]}× · {_usd(s["cost"])}</text>'
+            f'<text x="{x+80}" y="{y+21}" class="nl">{html.escape(name[:24])}</text>'
+            f'<text x="{x+80}" y="{y+39}" class="ns">{html.escape(second)}</text>'
         )
 
     rows = "".join(
@@ -308,6 +334,8 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
         f"<td class=r>{r['cost'] / m.total_cost if m.total_cost else 0:.1%}</td></tr>"
         for n, r in sorted(m.resource_cost.items(), key=lambda kv: -kv[1]["cost"])
     )
+    free_note = (f'<div class=sub>{html.escape(FREE_STEPS_NOTE)}</div>'
+                 if any(not m.nodes[a]["cost"] for a in order) else "")
     res_block = (
         "<h2>Spend by resource</h2><div class=scroll><table>"
         "<tr><th>Resource</th><th>Calls</th><th>Tokens</th><th>Cost</th><th>Share</th></tr>"
@@ -389,6 +417,7 @@ border-top:1px solid var(--line)}}
 <div class=scroll><svg width="{w}" height="{h}" viewBox="0 0 {w} {h}">
 <defs><marker id=a markerWidth=8 markerHeight=8 refX=7 refY=3 orient=auto>
 <path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"/></marker></defs>{''.join(svg)}</svg></div>
+{free_note}
 <h2>Most expensive paths</h2>
 <div class=scroll><table><tr><th>Share</th><th>Total</th><th>Avg</th><th>Steps</th><th>Path</th></tr>
 {rows}</table></div>

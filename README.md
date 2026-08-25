@@ -108,7 +108,50 @@ verifying — which is in the declared process and not in the log.
 
 `report`, `check` and `diff` pick up `./activity_map.yaml` when it is there, and say so.
 
-![The process graph: frequency on the edges, money in the nodes](https://raw.githubusercontent.com/gurov/traceroutine/main/docs/graph.png)
+And this is the process graph of the demo dataset — GitHub renders it straight out
+of `report -f md`, no image involved:
+
+```mermaid
+flowchart TD
+    S(["▶ start"])
+    n0["generate<br/>1,136× · $9.50"]
+    n1["plan<br/>400×"]
+    n2["retrieve<br/>1,251×"]
+    n3["notify<br/>27×"]
+    n4["respond<br/>400×"]
+    n5["remember<br/>209×"]
+    n6["verify<br/>298×"]
+    n7["fetch_ticket<br/>167×"]
+    E(["■ end"])
+    n0 -->|582| n2
+    n2 -->|542| n2
+    S -->|400| n1
+    n1 -->|400| n0
+    n4 -->|400| E
+    n2 -->|389| n0
+    n0 -->|298| n6
+    n0 -->|241| n4
+    n5 -->|209| n0
+    n2 -->|167| n7
+    n6 -->|159| n4
+    n2 -->|153| n5
+    n6 -->|127| n2
+    n7 -->|111| n0
+    n7 -->|56| n5
+    n3 -->|27| n0
+    n0 -->|15| n3
+    n6 -->|12| n3
+    classDef hot fill:#b4322e,stroke:#7d1f1c,color:#fff
+    classDef err stroke:#d97706,stroke-width:3px
+    class n0 hot
+```
+
+_Steps shown without a figure spend no tokens at the moment of the call. That is not
+the same as free: their results stay in the prompt and are re-read on every later
+turn — see context inflation above._
+
+`retrieve → retrieve` 542 times is the retrieval loop: a shape you can see in a
+graph and cannot see in a list of traces.
 
 ### Sources
 
