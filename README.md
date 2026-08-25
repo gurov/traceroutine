@@ -41,12 +41,23 @@ uvx traceroutine --help          # no install
 pip install traceroutine         # or into your environment
 ```
 
-From source:
+## Or on the demo dataset
+
+Synthetic traces with deliberately planted pathologies — a retrieval loop, an
+escalation to an expensive model, a long tail of rare paths:
 
 ```bash
 git clone https://github.com/OWNER/traceroutine && cd traceroutine
 uv pip install -e .
+python examples/gen_otlp.py examples/traces.json
+
+traceroutine ingest examples/traces.json -o events.parquet
+traceroutine report events.parquet -f md -m examples/activity_map.yaml
+traceroutine check events.parquet -p examples/process.yaml -m examples/activity_map.yaml
 ```
+
+The last command exits 1 and tells you that in 60% of runs the agent answers without
+verifying — which is in the declared process and not in the log.
 
 ## What it does
 
