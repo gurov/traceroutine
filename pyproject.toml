@@ -51,4 +51,4 @@ build-backend = "hatchling.build"
 packages = ["src/traceroutine"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "examples/", "README.md", "LICENSE", "action.yml"]
+include = ["src/", "tests/", "examples/", "docs/", "README.md", "LICENSE", "action.yml"]
