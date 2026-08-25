@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+# артефакты прогона
+events.parquet
+report.html
+report.md
+examples/traces.json
+
+# сгенерированный демо-словарь; в СВОЁМ проекте его наоборот коммитят
+activity_map.yaml

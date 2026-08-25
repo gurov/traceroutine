@@ -1,0 +1,83 @@
+name: 'agentmine check'
+description: 'Проверить трейсы LLM-агента на соответствие объявленному процессу и порогам стоимости'
+author: 'agentmine'
+branding: {icon: 'git-branch', color: 'red'}
+
+inputs:
+  traces:
+    description: 'Файл или папка с трейсами (OTLP JSON, транскрипты Claude Code, чат-транскрипты)'
+    required: true
+  process:
+    description: 'process.yaml — как агент должен работать'
+    required: false
+    default: 'process.yaml'
+  adapter:
+    description: 'Формат трейсов; по умолчанию определяется сам'
+    required: false
+    default: ''
+  case:
+    description: 'Case notion: trace | session | task | attr:<имя>'
+    required: false
+    default: 'trace'
+  map:
+    description: 'activity_map.yaml — словарь активностей (тот же, что в отчётах)'
+    required: false
+    default: ''
+  baseline:
+    description: 'events.parquet «как было» — включает пороги на рост стоимости и просадку fitness'
+    required: false
+    default: ''
+  warn-only:
+    description: 'Не валить сборку при нарушениях (режим приручения порогов)'
+    required: false
+    default: 'false'
+  install:
+    description: 'Что ставить: имя пакета, спецификатор версии или git+https://…'
+    required: false
+    default: 'agentmine'
+
+outputs:
+  status:          {description: 'ok | failed',                          value: '${{ steps.check.outputs.status }}'}
+  fitness:         {description: 'Соответствие объявленному flow, 0…1',  value: '${{ steps.check.outputs.fitness }}'}
+  conforming:      {description: 'Доля прогонов без отклонений',         value: '${{ steps.check.outputs.conforming }}'}
+  usd-per-case:    {description: 'Стоимость одного прогона, $',          value: '${{ steps.check.outputs.usd-per-case }}'}
+  off-model-share: {description: 'Доля бюджета на шагах вне модели',     value: '${{ steps.check.outputs.off-model-share }}'}
+  failures:        {description: 'Сколько порогов нарушено',             value: '${{ steps.check.outputs.failures }}'}
+
+# Значения входов НИГДЕ не подставляются прямо в текст `run:` — только через env.
+# Иначе трейсы или имя файла, пришедшие из PR, попадают в командную строку раннера:
+# это классическая инъекция в GitHub Actions, и проверка, которую можно обойти,
+# хуже отсутствующей.
+runs:
+  using: composite
+  steps:
+    # pipx предустановлен на раннерах GitHub — экшену не нужен ни setup-python,
+    # ни сторонние экшены, ни кеш. Чем меньше движущихся частей у проверки, тем
+    # меньше поводов её отключить.
+    - shell: bash
+      env: {INSTALL: '${{ inputs.install }}'}
+      run: |
+        pipx install "$INSTALL"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - shell: bash
+      env:
+        TRACES: '${{ inputs.traces }}'
+        CASE: '${{ inputs.case }}'
+        ADAPTER: '${{ inputs.adapter }}'
+      run: |
+        agentmine ingest "$TRACES" -o events.parquet \
+          --case "$CASE" ${ADAPTER:+--adapter "$ADAPTER"}
+
+    - id: check
+      shell: bash
+      env:
+        PROCESS: '${{ inputs.process }}'
+        MAP: '${{ inputs.map }}'
+        BASELINE: '${{ inputs.baseline }}'
+        WARN_ONLY: '${{ inputs.warn-only }}'
+      run: |
+        agentmine check events.parquet -p "$PROCESS" \
+          ${MAP:+-m "$MAP"} \
+          ${BASELINE:+--baseline "$BASELINE"} \
+          $([ "$WARN_ONLY" = "true" ] && echo --warn-only)
