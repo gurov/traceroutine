@@ -197,15 +197,52 @@ def _mm(s: str) -> str:
 
 # --- HTML --------------------------------------------------------------------
 
-def _layout(m: Model, order: list[str], edges: dict) -> dict:
-    """Мини-Sugiyama: ранг = самый длинный путь от start. Без минимизации пересечений —
-    это задача Ц4, здесь нужен только читаемый набросок."""
-    rank: dict[str, int] = {START: 0}
+def _back_edges(order: list[str], edges: dict) -> set[tuple[str, str]]:
+    """Рёбра, ведущие назад по циклу, — обход в глубину, итеративный.
+
+    Рекурсия здесь была бы уместнее, но длинная цепочка активностей упирается
+    в лимит стека Python раньше, чем в память.
+    """
     adj: dict[str, list[str]] = {}
     for (a, b) in edges:
         adj.setdefault(a, []).append(b)
-    for _ in range(len(order) + 2):          # релаксация, устойчива к циклам
-        for (a, b) in edges:
+    state: dict[str, int] = {}               # 0 — в текущем стеке, 1 — закрыт
+    back: set[tuple[str, str]] = set()
+    for root in [START] + order:
+        if root in state:
+            continue
+        state[root] = 0
+        stack = [(root, iter(adj.get(root, ())))]
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                state[node] = 1
+                stack.pop()
+            elif state.get(nxt) == 0:        # цель ещё в стеке — это ребро назад
+                back.add((node, nxt))
+            elif nxt not in state:
+                state[nxt] = 0
+                stack.append((nxt, iter(adj.get(nxt, ()))))
+    return back
+
+
+def _layout(m: Model, order: list[str], edges: dict) -> dict:
+    """Мини-Sugiyama: ранг = самый длинный путь от start. Без минимизации пересечений —
+    это задача Ц4, здесь нужен только читаемый набросок.
+
+    Обратные рёбра выбрасываются ДО расчёта ранга. Прежняя релаксация называлась
+    устойчивой к циклам, но не была ею: каждый проход поднимал ранг всех узлов
+    цикла на единицу, а проходов делалось len(order)+2. Граф агента состоит из
+    циклов — демо-отчёт на СЕМИ активностях получал холст высотой 11 340 px,
+    почти весь пустой. На ациклическом графе релаксация сходится за один проход
+    по топологическому порядку и за len(order)+2 в худшем случае.
+    """
+    back = _back_edges(order, edges)
+    forward = [e for e in edges if e not in back]
+    rank: dict[str, int] = {START: 0}
+    for _ in range(len(order) + 2):
+        for (a, b) in forward:
             if b not in (START, END):
                 rank[b] = max(rank.get(b, 1), rank.get(a, 0) + 1)
     rank[END] = max(rank.values(), default=0) + 1
@@ -216,6 +253,14 @@ def _layout(m: Model, order: list[str], edges: dict) -> dict:
     for r, nodes in by_rank.items():
         for i, node in enumerate(nodes):
             pos[node] = (60 + i * 260 - (len(nodes) - 1) * 130, 60 + r * 120)
+    # Ранг с несколькими узлами центрируется относительно 60 и уезжает в
+    # отрицательный x, а viewBox начинается с нуля: узел и подпись ребра просто
+    # обрезались слева. Сдвигаем весь холст, а не отдельный ранг, иначе поедут
+    # колонки.
+    if pos:
+        dx = 60 - min(x for x, _ in pos.values())
+        if dx:
+            pos = {k: (x + dx, y) for k, (x, y) in pos.items()}
     return pos
 
 
