@@ -136,6 +136,129 @@ def test_mermaid_labels_are_escaped():
     assert '(' not in graph.split("flowchart TD")[1].split("classDef")[0].replace('(["', '').replace('"])', '')
 
 
+
+# --- flame: дерево префиксов ------------------------------------------------
+# Directly-follows граф у агента вырождается в звезду с хабом: топология задана
+# конструкцией и ничего не сообщает. Дерево префиксов — линза, которая на этих
+# данных ещё жива, и эти тесты стерегут именно её свойства.
+
+def ev(case, act, cost=0.0, ts=0.0):
+    return {"case_id": case, "event_id": f"{case}-{ts}-{act}", "activity_raw": act,
+            "activity": act, "ts_start": ts, "ts_end": ts + 1, "parent_id": None,
+            "agent": None, "resource": None, "tokens_in": 0, "tokens_cached": 0,
+            "tokens_cache_write": 0, "tokens_out": 0, "cost_usd": cost, "status": "ok",
+            "error_type": None, "attrs": "{}"}
+
+
+def _model(paths):
+    """paths: {последовательность: (сколько кейсов, стоимость всех этих кейсов)}"""
+    from traceroutine.mine import Model, Variant
+    m = Model()
+    for seq, (n, cost) in paths.items():
+        m.variants.append(Variant(seq=seq, n=n, cost=cost))
+        m.n_cases += n
+        m.total_cost += cost
+        for a in seq:
+            s = m.nodes.setdefault(a, {"n": 0, "cost": 0.0, "duration": 0.0,
+                                       "errors": 0, "tokens": 0})
+            s["n"] += n
+    return m
+
+
+def test_prefix_tree_children_partition_the_parent():
+    """Ширина блока — доля счёта, ушедшая в эту ветку. Если дети не делят
+    родителя ровно, картинка врёт масштабом, а не подписью."""
+    from traceroutine.report import _prefix_tree
+    m = _model({("a", "b"): (1, 10.0), ("a", "c"): (1, 30.0), ("d",): (1, 60.0)})
+    root = _prefix_tree(m, 10)
+    assert root["cost"] == pytest.approx(100.0)
+    assert root["kids"]["a"]["cost"] == pytest.approx(40.0)
+    assert sum(k["cost"] for k in root["kids"]["a"]["kids"].values()) == pytest.approx(40.0)
+
+
+def test_prefix_tree_keeps_the_run_that_ends_early():
+    """Кейс, закончившийся на префиксе, обязан остаться в ширине родителя:
+    иначе ветка визуально сужается там, где прогоны просто завершились."""
+    from traceroutine.report import _prefix_tree
+    m = _model({("a",): (1, 25.0), ("a", "b"): (1, 75.0)})
+    root = _prefix_tree(m, 10)
+    assert root["kids"]["a"]["cost"] == pytest.approx(100.0)
+    assert root["kids"]["a"]["kids"]["b"]["cost"] == pytest.approx(75.0)
+
+
+def test_hub_is_detected_and_loses_its_colour():
+    """Ход модели стоит на обоих концах почти каждого перехода. Отдать ему
+    самый заметный цвет — отдать всю яркость картинки константе."""
+    from traceroutine.mine import mine
+    from traceroutine.report import _hub, _series
+    evs = []
+    for c in range(4):
+        for i, a in enumerate(["chat", "tool:Bash", "chat", "tool:Read", "chat"]):
+            evs.append(ev(f"c{c}", a, ts=float(i)))
+    m = mine(evs)
+    assert _hub(m) == "chat"
+    colours = _series(m)
+    assert colours["chat"] == "sh"
+    assert {colours["tool:Bash"], colours["tool:Read"]} == {"s1", "s2"}
+
+
+def test_no_hub_when_the_graph_is_a_chain():
+    """Правило про хаб выключается само: у обычного пайплайна хаба нет, и три
+    цвета должны достаться трём самым частым активностям."""
+    from traceroutine.mine import mine
+    from traceroutine.report import _hub, _series
+    evs = [ev("c1", a, ts=float(i)) for i, a in enumerate(["a", "b", "c", "d"])]
+    m = mine(evs)
+    assert _hub(m) is None
+    assert set(_series(m).values()) == {"s1", "s2", "s3"}
+
+
+def test_flame_drops_slivers_thinner_than_a_pixel():
+    """Хвост из сотен уникальных путей превращает картинку в шум шириной
+    в волос. Блок тоньше порога уходит вместе с поддеревом."""
+    from traceroutine.report import _flame_blocks, _prefix_tree
+    paths = {("a", "b"): (1, 1000.0)}
+    for i in range(500):                       # каждый — 0.002% ширины
+        paths[("a", f"x{i}")] = (1, 0.02)
+    blocks = _flame_blocks(_prefix_tree(_model(paths), 6), 6)
+    assert [b for b in blocks if b[3] == "b"]
+    assert not [b for b in blocks if b[3].startswith("x")]
+
+
+def test_flame_survives_a_log_with_one_run():
+    from traceroutine.report import _flame_svg
+    svg, cap = _flame_svg(_model({("a", "b"): (1, 1.0)}))
+    assert "<rect" in svg and cap
+
+
+def test_html_report_carries_the_flame_and_the_carry_chart():
+    from traceroutine.analyze import ContextCost
+    from traceroutine.report import render_html
+    m = _model({("chat", "tool:Bash", "chat"): (3, 30.0)})
+    m.total_cost = 30.0
+    out = render_html(m, inflation=[ContextCost(step="tool:Bash", n=3, added_avg=1000.0,
+                                                carried_tokens=3e6, est_usd=12.0)])
+    assert "Where the money goes" in out and "class=flame" in out
+    assert "What a step costs after itself" in out
+    assert "$0.00 at the call" in out, "смысл блока — шаг, который в разбивке бесплатен"
+
+
+def test_carry_chart_leaves_the_hub_out():
+    """У хаба «в момент вызова» стоит вся сумма счёта, и рядом с остальными
+    строками его короткий столбик читается как «модель дешёвая»."""
+    from traceroutine.analyze import ContextCost
+    from traceroutine.mine import mine
+    from traceroutine.report import _inflation_html
+    evs = []
+    for c in range(3):
+        for i, a in enumerate(["chat", "tool:Bash", "chat"]):
+            evs.append(ev(f"c{c}", a, cost=1.0 if a == "chat" else 0.0, ts=float(i)))
+    m = mine(evs)
+    out = _inflation_html(m, [ContextCost(step="chat", n=6, est_usd=9.0),
+                              ContextCost(step="tool:Bash", n=3, est_usd=4.0)])
+    assert "tool:Bash" in out and ">chat<" not in out
+
+
 # --- one-shot: путь по умолчанию --------------------------------------------
 # Три команды и два промежуточных файла стояли между человеком и первой
 # находкой. Эти тесты стерегут ровно то, что их больше нет.

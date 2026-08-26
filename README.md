@@ -7,7 +7,7 @@ Observability platforms attribute spend by **who**: per user, per team, per API 
 
 > An agent's cost is a property of its trajectory, not of its request.
 
-![The report: what to fix, ranked by money](https://raw.githubusercontent.com/gurov/traceroutine/main/docs/report.png)
+![The report: where the money went, path by path](https://raw.githubusercontent.com/gurov/traceroutine/main/docs/report.png)
 
 ## One command, zero instrumentation
 
@@ -17,18 +17,18 @@ no account, no arguments:
 ```console
 $ uvx traceroutine
 reading ~/.claude/projects as claude-code — nothing leaves this machine
-473 cases · 329 paths · $809.70 at list prices · rework 89.1% -> report.html
-  1. Results of `tool:Bash` carry 12% of the budget through context (up to $96.12)
+483 cases · 335 paths · $849.06 at list prices · rework 89.2% -> report.html
+  1. Results of `tool:Bash` carry 12% of the budget through context (up to $105.23)
   2. Loop `chat → tool:Edit` runs an extra time (up to $51.33)
-  3. Working rhythm `chat → tool:Bash` — 40% of the budget
+  3. Working rhythm `chat → tool:Bash` — 41% of the budget
 ```
 
 Three seconds, and that is my own history. The first finding is the whole thesis:
 
 > **Results of `tool:Bash` carry 12% of the budget through context.**
 > The step itself burns no tokens and shows as **$0.00** in every cost breakdown. But
-> each of its results adds ~1,385 tokens to the prompt, and those are re-read on
-> **every** subsequent turn: 117M tokens carried in total. Fix by truncating output,
+> each of its results adds ~1,391 tokens to the prompt, and those are re-read on
+> **every** subsequent turn: 129M tokens carried in total. Fix by truncating output,
 > not by switching models.
 
 A tool call costs nothing when it happens and keeps costing for the rest of the run.
@@ -40,9 +40,9 @@ carried *how many* dollars across the rest of the trajectory.
 
 The dollars are API list prices, not an invoice. I pay a $20 subscription, so this is
 what those tokens would have cost — which is its own small finding: a flat fee hides a
-month that prices out at $810. Cross-checked against
+month that prices out at $849. Cross-checked against
 [ccusage](https://github.com/ryoppippi/ccusage) on the same instant: the two agree to
-within 0.1% on every token category.
+0.05% on the total and to within 0.25% on every token category.
 
 ## The shape of the work
 
@@ -52,38 +52,45 @@ run as above, rendered by GitHub straight out of `report -f md`, no image involv
 ```mermaid
 flowchart TD
     S(["▶ start"])
-    n0["chat<br/>6,864× · $809.70"]
-    n1["tool:Bash<br/>4,237×"]
+    n0["chat<br/>7,096× · $849.06"]
+    n1["tool:Bash<br/>4,422×"]
     n2["tool:Edit<br/>1,060×"]
-    n3["tool:Read<br/>587×"]
-    n4["tool:Write<br/>390×"]
+    n3["tool:Read<br/>617×"]
+    n4["tool:Write<br/>392×"]
     E(["■ end"])
-    n0 -->|4073| n1
-    n1 -->|4053| n0
+    n0 -->|4257| n1
+    n1 -->|4237| n0
     n0 -->|1049| n2
     n2 -->|1049| n0
-    n0 -->|573| n3
-    n3 -->|566| n0
-    S -->|473| n0
-    n0 -->|430| E
-    n0 -->|388| n4
-    n4 -->|386| n0
-    n1 -->|142| n1
+    n0 -->|603| n3
+    n3 -->|596| n0
+    S -->|483| n0
+    n0 -->|440| E
+    n0 -->|390| n4
+    n4 -->|388| n0
+    n1 -->|143| n1
     classDef hot fill:#b4322e,stroke:#7d1f1c,color:#fff
     classDef err stroke:#d97706,stroke-width:3px
     class n0 hot
     class n1,n2,n3,n4 err
 ```
 
-Everything returns to `chat`, because that is what a coding agent is: 4,073 calls out to
-`tool:Bash` and 4,053 back. That traffic is the 40% of the budget in finding 3 — not an
+Everything returns to `chat`, because that is what a coding agent is: 4,257 calls out to
+`tool:Bash` and 4,237 back. That traffic is the 41% of the budget in finding 3 — not an
 anomaly but the working rhythm, and it only reads as a rhythm once it is drawn.
-`tool:Bash` also follows itself 142 times: commands issued back to back with no model
+`tool:Bash` also follows itself 143 times: commands issued back to back with no model
 turn in between. Amber outlines mark activities that produced errors.
 
 Steps shown without a dollar figure spend no tokens at the moment of the call. That is
 not the same as free — their results stay in the prompt and are re-read on every later
 turn, which is finding 1 above.
+
+That graph is the transitions. The picture at the top of this page is the **trajectories**:
+runs merged by their common start, each block as wide as the share of the bill that went
+down that branch. It is a flame graph with the stack replaced by the run, and it is there
+because a list of paths stops working on long runs — past step 16 in that log, most runs
+are already on a path no other run takes. Prefixes still agree long after whole paths
+have stopped.
 
 ## Does it read my code?
 

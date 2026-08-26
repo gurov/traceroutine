@@ -11,7 +11,7 @@ from .abstract import (GEMINI_DEFAULT, MODEL_DEFAULT, OLLAMA_DEFAULT, ActivityMa
                        AnthropicBackend, GeminiBackend, NoBackend, OllamaBackend, audit,
                        build, stability)
 from .adapters import pick
-from .analyze import drift, findings
+from .analyze import context_inflation, drift, findings
 from .conform import ConfigError, Process
 from .conform import check as run_check
 from .conform import findings as conformance_findings
@@ -261,11 +261,14 @@ def report(
         found = (conformance_findings(rep) + found)[:6]
         for w in rep.warnings:
             typer.secho(f"conformance: {w}", fg=typer.colors.YELLOW)
-    kw = {"found": found}
+    # Раздувание контекста считается тут, а не внутри рендера: это единственная
+    # находка, которой нужны СОБЫТИЯ, а не модель процесса, и тащить события в
+    # report.py ради одной картинки — обмен слоями местами.
+    kw = {"found": found, "inflation": context_inflation(evs, top=5)}
     if max_nodes:
         kw["max_nodes"] = max_nodes
     if fmt == "md":
-        text = render_markdown(m, **kw)
+        text = render_markdown(m, **{k: v for k, v in kw.items() if k != "inflation"})
         out = out or Path("report.md")
     elif fmt == "html":
         text = render_html(m, **kw)

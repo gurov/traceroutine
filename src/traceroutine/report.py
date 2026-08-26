@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import html
 import json
+import math
 from datetime import datetime, timezone
 
-from .analyze import Drift, Finding, _path_digest
+from .analyze import VARIANT_MIN_REUSE, ContextCost, Drift, Finding, _path_digest
 from .conform import CheckReport
 from .mine import END, START, Model
 
@@ -339,9 +340,414 @@ def _layout(m: Model, order: list[str], edges: dict) -> dict:
     return pos
 
 
-def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
-                found: list[Finding] | None = None) -> str:
-    order, edges = _spine(m, max_nodes, min_edge)
+# --- flame: дерево префиксов траекторий --------------------------------------
+
+# Directly-follows граф — правильная линза для ERP-процесса и почти пустая для
+# агента. У агента топология задана конструкцией: ход модели, вызов инструмента,
+# снова ход модели. DFG честно рисует эту звезду с хабом в центре — и не говорит
+# ничего, чего не знал бы читатель до его открытия.
+#
+# Информация у агента лежит не в биграммах, а в ПРЕФИКСАХ: с какого шага прогоны
+# расходятся и сколько денег утекло по каждой ветке. Дерево префиксов заодно
+# чинит измеренную границу вариантного анализа (Ц3.5): полные пути на длинных
+# прогонах уникальны на 100%, а первые их шаги совпадают почти всегда. Список
+# вариантов на таком логе вырождается, дерево — сужается постепенно и показывает
+# ровно ту глубину, на которой согласие кончается.
+#
+# Форма — icicle, то есть flame graph профайлера, только стек заменён траекторией.
+# Читателю-инженеру объяснять её не надо: он видел её в perf, в py-spy и в
+# Chrome DevTools. Это и есть позиционирование одной картинкой — профайлер для
+# агента.
+FLAME_W = 1000.0        # система координат; ширина на странице резиновая
+FLAME_ROW = 21.0
+FLAME_GUTTER = 34.0
+
+
+def _prefix_tree(m: Model, max_depth: int) -> dict:
+    """Варианты, склеенные по общему началу. Стоимость узла — сумма ПОЛНЫХ
+    стоимостей кейсов, прошедших через этот префикс: дети делят родителя ровно,
+    а остаток по ширине — это кейсы, закончившиеся здесь."""
+    root: dict = {"cost": 0.0, "n": 0, "kids": {}}
+    for v in m.variants:
+        node = root
+        node["cost"] += v.cost
+        node["n"] += v.n
+        for act in v.seq[:max_depth]:
+            node = node["kids"].setdefault(act, {"cost": 0.0, "n": 0, "kids": {}})
+            node["cost"] += v.cost
+            node["n"] += v.n
+    return root
+
+
+def _flame_blocks(root: dict, max_depth: int, min_w: float = 1.4) -> list[tuple]:
+    """(глубина, x, ширина, активность, узел). Блоки тоньше пикселя отбрасываются
+    вместе с поддеревом — иначе хвост из сотен уникальных путей превращает
+    картинку в шум шириной в волос."""
+    out: list[tuple] = []
+    stack = [(root, 0, 0.0, FLAME_W)]
+    while stack:
+        node, depth, x, w = stack.pop()
+        if depth >= max_depth or node["cost"] <= 0:
+            continue
+        cx = x
+        for act, kid in sorted(node["kids"].items(), key=lambda kv: -kv[1]["cost"]):
+            kw = w * kid["cost"] / node["cost"]
+            if kw < min_w:
+                continue
+            out.append((depth, cx, kw, act, kid))
+            stack.append((kid, depth + 1, cx, kw))
+            cx += kw
+    return out
+
+
+# Доля переходов, при которой активность считается хабом.
+HUB_SHARE = 0.7
+
+
+def _hub(m: Model) -> str | None:
+    """Активность, через которую идёт почти каждый переход.
+
+    У агента это ход модели: он стоит на обоих концах ~99% рёбер, потому что
+    траектория по построению есть чередование «ход модели — вызов инструмента».
+    Красить его самым заметным цветом — отдать всю яркость картинки константе.
+    Определяется по данным, а не по имени: на логе обычного пайплайна (OTLP)
+    хаба нет, и правило само выключается.
+    """
+    total = sum(e.n for e in m.edges.values())
+    if not total:
+        return None
+    touch: dict[str, int] = {}
+    for (a, b), e in m.edges.items():
+        for x in (a, b):
+            if x in m.nodes:
+                touch[x] = touch.get(x, 0) + e.n
+    best = max(touch, key=lambda k: touch[k], default=None)
+    return best if best and touch[best] / total >= HUB_SHARE else None
+
+
+def _series(m: Model) -> dict[str, str]:
+    """Цвет получают три самые частые активности, остальные — нейтральный серый.
+
+    Три — это не вкусовщина, а потолок, посчитанный валидатором палитры: соседом
+    блока в icicle может оказаться любой другой блок, а на ПОЛНОМ наборе пар
+    четвёртый оттенок уже не проходит порог различимости при дальтонизме в
+    тёмной теме. Опознание всё равно не цветом одним: имя написано внутри блока
+    и продублировано в hover.
+
+    Хаб выведен из этих трёх и получает собственный приглушённый тон: цвет должен
+    достаться тому, что в траектории МЕНЯЕТСЯ, а не тому, что есть везде.
+    """
+    hub = _hub(m)
+    rest = sorted((kv for kv in m.nodes.items() if kv[0] != hub),
+                  key=lambda kv: (-kv[1]["n"], kv[0]))[:3]
+    out = {a: f"s{i}" for i, (a, _) in enumerate(rest, 1)}
+    if hub:
+        out[hub] = "sh"
+    return out
+
+
+def _reuse_depth(root: dict, depth_max: int) -> int | None:
+    """Глубина, начиная с которой у большинства прогонов путь уже свой.
+
+    Порог тот же самый, по которому слой Analyze решает, применим ли вообще
+    вариантный анализ (`VARIANT_MIN_REUSE`), — и это не совпадение: это одно и то
+    же утверждение, сказанное числом в находке и линией на картинке. Считать
+    ширину блоков вместо повторяемости было бы проще и неверно: узкая ветка
+    может быть популярной и дешёвой.
+    """
+    level = [root]
+    for d in range(depth_max):
+        nodes = [k for node in level for k in node["kids"].values()]
+        if not nodes:
+            return None
+        total = sum(k["n"] for k in nodes)
+        shared = sum(k["n"] for k in nodes if k["n"] > 1)
+        if total and shared / total < VARIANT_MIN_REUSE:
+            return d
+        level = nodes
+    return None
+
+
+def _flame_svg(m: Model, max_depth: int = 18) -> tuple[str, str]:
+    """SVG и подпись под ним. Пустая строка — если рисовать нечего."""
+    root = _prefix_tree(m, max_depth)
+    blocks = _flame_blocks(root, max_depth)
+    if not blocks:
+        return "", ""
+    color = _series(m)
+    widest: dict[int, float] = {}
+    covered: dict[int, float] = {}
+    for d, _x, w, _a, _k in blocks:
+        widest[d] = max(widest.get(d, 0.0), w)
+        covered[d] = covered.get(d, 0.0) + w
+
+    # Хвост, где нарисовано меньше шестой части строки, не рисуем вовсе. На
+    # неабстрагированном логе (`search(query=...)` — своя активность) таких строк
+    # десяток, и это десяток почти пустых полос: конфетти шириной в пиксель
+    # сообщает ровно то же, что подпись под графиком, но занимает пол-экрана.
+    depth_max = 0
+    for d in range(max(widest) + 1):
+        if covered.get(d, 0.0) < FLAME_W * 0.15:
+            break
+        depth_max = d + 1
+    if not depth_max:
+        return "", ""
+    blocks = [b for b in blocks if b[0] < depth_max]
+    h = depth_max * FLAME_ROW + 8
+
+    shatter = _reuse_depth(root, depth_max)
+
+    svg = [f'<rect x="{FLAME_GUTTER}" y="0" width="{FLAME_W}" height="{h - 8}" class="fbg"/>']
+    for d in range(depth_max):
+        if d % 5 == 4:
+            svg.append(f'<text x="{FLAME_GUTTER - 8}" y="{d * FLAME_ROW + 14}" '
+                       f'class="fg">{d + 1}</text>')
+    for d, x, w, act, kid in blocks:
+        # 1.5px зазора между блоками: без него соседи одного цвета сливаются в
+        # сплошную полосу, и дерево читается как гистограмма.
+        bx, bw = FLAME_GUTTER + x + 0.75, max(w - 1.5, 0.6)
+        by = d * FLAME_ROW
+        cls = color.get(act, "sx")
+        share = kid["cost"] / m.total_cost if m.total_cost else 0.0
+        tip = (f'{act} · step {d + 1} · {kid["n"]:,} run' + ("s" if kid["n"] != 1 else "")
+               + f' · {_usd(kid["cost"])} ({share:.1%})')
+        label = ""
+        if bw > 46:
+            short = act.split(":")[-1]
+            room = int((bw - 12) / 5.9)
+            if len(short) > room:
+                short = short[:max(room - 1, 1)] + "…"
+            label = (f'<text x="{bx + 6}" y="{by + 14}" class="fl">'
+                     f'{html.escape(short)}</text>')
+        svg.append(f'<g><title>{html.escape(tip)}</title>'
+                   f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw:.1f}" '
+                   f'height="{FLAME_ROW - 1.5:.1f}" rx="2" class="fb {cls}"/>{label}</g>')
+    if shatter is not None and shatter < depth_max:
+        y = shatter * FLAME_ROW - 0.75
+        svg.append(f'<line x1="{FLAME_GUTTER}" y1="{y:.1f}" x2="{FLAME_GUTTER + FLAME_W}" '
+                   f'y2="{y:.1f}" class="fcut"/>'
+                   # Подпись садится поверх блоков — на этой глубине свободного
+                   # места нет нигде. Плашка в цвет фона дешевле, чем поля.
+                   f'<rect x="{FLAME_GUTTER + FLAME_W - 128}" y="{y - 15:.1f}" '
+                   f'width="128" height="14" class="fclbg"/>'
+                   f'<text x="{FLAME_GUTTER + FLAME_W - 3}" y="{y - 4:.1f}" class="fcl">'
+                   f'runs stop agreeing here</text>')
+
+    legend = "".join(
+        f'<span class=lg><i class="sw {cls}"></i>{html.escape(a)}</span>'
+        for a, cls in sorted(color.items(), key=lambda kv: kv[1])
+    ) + '<span class=lg><i class="sw sx"></i>everything else</span>'
+
+    cap = (f"Each row is one step of a run; width is the share of the bill that went "
+           f"down that branch. Hover for the figures.")
+    if shatter is not None:
+        cap += (f" Below the line — step {shatter + 1} — most runs are already on a "
+                f"path no other run takes. That is where a list of whole trajectories "
+                f"stops saying anything about a log like this one, and why the findings "
+                f"above lean on depth and on carried context instead.")
+    # Масштаб равномерный: viewBox + width 100% без height. Растягивать только по
+    # x было бы точнее по строкам, но вместе с блоками растянулись бы и буквы.
+    return (f'<div class=legend>{legend}</div>'
+            f'<svg viewBox="0 0 {FLAME_W + FLAME_GUTTER + 4} {h}" width="100%" '
+            f'class=flame>{"".join(svg)}</svg>', cap)
+
+
+# --- раздувание контекста ----------------------------------------------------
+
+# Единственная числовая находка инструмента, которой нет в usage-дашбордах, до
+# сих пор жила одной строкой текста. Картинка нужна ровно та, что показывает
+# разрыв: слева цена в момент вызова, справа — цена на всём остатке траектории.
+INFL_TITLE = "What a step costs after itself"
+INFL_LEAD = (
+    "A tool call bills nothing at the moment it runs. Its result then sits in the "
+    "prompt and is re-read on every later turn, so the bill arrives spread over the "
+    "rest of the trajectory — under the model call, where no breakdown by tool exists."
+)
+
+
+def _at_call(m: Model, step: str) -> str:
+    """`_usd` печатает $0.0000 для всего мельче цента — здесь это ровно та подпись,
+    ради которой блок и нарисован, и четыре нуля после точки её обесценивают."""
+    c = m.nodes.get(step, {}).get("cost", 0.0)
+    return _usd(c) if c else "$0.00"
+
+
+def _inflation_html(m: Model, infl: list[ContextCost]) -> str:
+    # Блок отвечает на вопрос «во что обходится шаг, который в разбивке стоит
+    # $0.00». Хаб оплачивает всю траекторию, и его строка рядом с остальными
+    # сбивает шкалу: короткий столбик напротив «$821.46 at the call» читается
+    # как «модель дешёвая». Его место — в таблице расходов по ресурсам.
+    hub = _hub(m)
+    infl = [c for c in infl if c.step != hub] or infl
+    if not infl:
+        return ""
+    top = max(c.est_usd for c in infl) or 1.0
+    rows = "".join(
+        f'<div class=ir><span class=iname><code>{html.escape(c.step)}</code></span>'
+        f'<span class=iat>{_at_call(m, c.step)} at the call</span>'
+        f'<span class=ibar title="{c.n:,}× · +{c.added_avg:,.0f} tokens per call · '
+        f'{c.carried_tokens / 1e6:,.1f}M carried">'
+        f'<i style="width:{max(c.est_usd / top * 100, 0.6):.1f}%"></i></span>'
+        f'<span class=ival>{_usd(c.est_usd)}</span></div>'
+        for c in infl
+    )
+    return (f'<h2>{INFL_TITLE}</h2><p class=lead>{html.escape(INFL_LEAD)}</p>'
+            f'<div class=infl>{rows}</div>')
+
+
+# --- граф: слоями или звездой ------------------------------------------------
+
+NODE_W, NODE_H = 160.0, 52.0
+
+
+def _nodes_svg(m: Model, pos: dict, color: dict) -> list[str]:
+    """Коробки узлов. Слева — полоска того же цвета, что и в дереве префиксов:
+    две картинки об одном логе обязаны опознаваться одним взглядом."""
+    out = []
+    for node, (x, y) in pos.items():
+        if node in (START, END):
+            out.append(
+                f'<rect x="{x + 20:.1f}" y="{y:.1f}" width="120" height="26" rx="13" '
+                f'class="term"/><text x="{x + 80:.1f}" y="{y + 18:.1f}" class="nl term-t">'
+                f'{html.escape(node)}</text>')
+            continue
+        s = m.nodes[node]
+        share = s["cost"] / m.total_cost if m.total_cost else 0
+        cls = "hot" if share > 0.15 else ("warm" if share > 0.05 else "cool")
+        name, second = _node_label(node, s)
+        strip = (f'<rect x="{x:.1f}" y="{y:.1f}" width="5" height="{NODE_H}" '
+                 f'class="stripe {color[node]}"/>' if node in color else "")
+        out.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{NODE_W}" height="{NODE_H}" rx="6" '
+            f'class="node {cls}"/>{strip}'
+            f'<text x="{x + 80:.1f}" y="{y + 21:.1f}" class="nl">{html.escape(name[:24])}</text>'
+            f'<text x="{x + 80:.1f}" y="{y + 39:.1f}" class="ns">{html.escape(second)}</text>')
+    return out
+
+
+def _pairs(edges: dict) -> list[tuple[str, str, int, str]]:
+    """Рёбра, свёрнутые в пары. Встречные рисуются одной линией: 4 088 туда и
+    4 068 обратно ложились на одну кривую и давали две налезающие подписи."""
+    out, drawn = [], set()
+    for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1].n):
+        if (a, b) in drawn:
+            continue
+        drawn.add((a, b))
+        back = edges.get((b, a))
+        if back is not None and a != b:
+            drawn.add((b, a))
+            out.append((a, b, max(e.n, back.n), f"{e.n:,} ⇄ {back.n:,}"))
+        else:
+            out.append((a, b, e.n, f"{e.n:,}"))
+    return out
+
+
+def _rect_exit(cx: float, cy: float, tx: float, ty: float,
+               w: float, h: float) -> tuple[float, float]:
+    """Точка на границе коробки в направлении цели — иначе стрелка утыкается
+    в центр узла и прячется под ним."""
+    dx, dy = tx - cx, ty - cy
+    if not dx and not dy:
+        return cx, cy
+    s = min((w / 2) / abs(dx) if dx else 1e9, (h / 2) / abs(dy) if dy else 1e9)
+    return cx + dx * s, cy + dy * s
+
+
+def _graph_radial(m: Model, order: list[str], edges: dict, hub: str,
+                  color: dict) -> tuple[str, float, float]:
+    """Звезда: хаб в центре, остальное по кольцу.
+
+    Прежняя раскладка была мини-Sugiyama — правильная для процесса, у которого
+    есть направление. У агента его нет: траектория по построению есть возврат в
+    ход модели, поэтому «ранг» узла определялся тем, каким путём обход добрался
+    до него первым. Отсюда и брались коробки во втором ряду, к которым сходилась
+    одна случайная стрелка, и висящее «end» под инструментом, на котором просто
+    оборвалось несколько прогонов. Звезда ничего не выдумывает: она рисует ровно
+    ту топологию, которая в логе есть.
+    """
+    ring = [a for a in order if a != hub]
+    n = max(len(ring) + 2, 4)
+    n += n % 2                                # чётное — иначе end не встаёт напротив start
+    R = max(230.0, 31.0 * n)
+    pad = 120.0                               # запас на петли и подписи снаружи кольца
+    cx = cy = R + pad
+    pos = {hub: (cx - NODE_W / 2, cy - NODE_H / 2)}
+    # start сверху, end ровно напротив: иначе конец процесса оказывается случайной
+    # спицей рядом с началом и читается как ещё один инструмент.
+    slots = {0: START, n // 2: END}
+    free = (i for i in range(n) if i not in slots)
+    for a in ring:
+        slots[next(free)] = a
+    for i, a in slots.items():
+        ang = -math.pi / 2 + 2 * math.pi * i / n
+        pos[a] = (cx + R * math.cos(ang) - NODE_W / 2,
+                  cy + R * math.sin(ang) - NODE_H / 2)
+
+    def centre(a: str) -> tuple[float, float]:
+        x, y = pos[a]
+        return x + NODE_W / 2, y + (13.0 if a in (START, END) else NODE_H / 2)
+
+    def box(a: str) -> tuple[float, float]:
+        return (120.0, 26.0) if a in (START, END) else (NODE_W, NODE_H)
+
+    top = max((e.n for e in edges.values()), default=1)
+    svg: list[str] = []
+    for a, b, n_edge, label in _pairs(edges):
+        if a not in pos or b not in pos:
+            continue
+        width = 1 + 4 * (n_edge / top)
+        ax, ay = centre(a)
+        if a == b:                                  # петля — дужка наружу кольца
+            ux, uy = ax - cx, ay - cy
+            d = math.hypot(ux, uy) or 1.0
+            ux, uy = ux / d, uy / d
+            px, py = -uy, ux
+            bw, bh = box(a)
+            sx, sy = _rect_exit(ax, ay, ax + px * 100, ay + py * 100, bw, bh)
+            ex, ey = _rect_exit(ax, ay, ax - px * 100, ay - py * 100, bw, bh)
+            mx, my = ax + ux * 96, ay + uy * 96
+            svg.append(
+                f'<path d="M{sx:.1f},{sy:.1f} Q{mx:.1f},{my:.1f} {ex:.1f},{ey:.1f}" '
+                f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" '
+                f'marker-end="url(#a)"/>'
+                f'<text x="{ax + ux * 84:.1f}" y="{ay + uy * 84:.1f}" class="el em">'
+                f'↺ {n_edge:,}</text>')
+            continue
+        bx, by = centre(b)
+        marker = (' marker-start="url(#r)" marker-end="url(#a)"' if "⇄" in label
+                  else ' marker-end="url(#a)"')
+        # Хорда между двумя спицами прошла бы прямо через хаб. Выгибаем её наружу.
+        chord = hub not in (a, b)
+        mx, my = (ax + bx) / 2, (ay + by) / 2
+        if chord:
+            d = math.hypot(mx - cx, my - cy) or 1.0
+            mx, my = cx + (mx - cx) * (1 + 90 / d), cy + (my - cy) * (1 + 90 / d)
+        x1, y1 = _rect_exit(ax, ay, mx, my, *box(a))
+        x2, y2 = _rect_exit(bx, by, mx, my, *box(b))
+        lx, ly = ((mx, my) if chord else
+                  (x1 + (x2 - x1) * 0.42, y1 + (y2 - y1) * 0.42))
+        svg.append(
+            f'<path d="M{x1:.1f},{y1:.1f} Q{mx:.1f},{my:.1f} {x2:.1f},{y2:.1f}" '
+            f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}"{marker}/>'
+            f'<rect x="{lx - len(label) * 2.7 - 3:.1f}" y="{ly - 9:.1f}" '
+            f'width="{len(label) * 5.4 + 6:.1f}" height="12" class="elbg"/>'
+            f'<text x="{lx:.1f}" y="{ly:.1f}" class="el em">{label}</text>')
+
+    svg += _nodes_svg(m, pos, color)
+    # Кольцо на квадратном холсте оставляет сверху и снизу по трети пустоты, а
+    # свободный слот (при нечётном числе спиц) — ещё и сбоку. Обрезаем по факту.
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    dx, dy = pad - min(xs), pad - min(ys)
+    w = max(xs) - min(xs) + NODE_W + 2 * pad
+    h = max(ys) - min(ys) + NODE_H + 2 * pad
+    return f'<g transform="translate({dx:.1f},{dy:.1f})">{"".join(svg)}</g>', w, h
+
+
+def _graph_layered(m: Model, order: list[str], edges: dict,
+                   color: dict) -> tuple[str, float, float]:
+    """Ранги сверху вниз. Подходит логу, у которого есть направление: пайплайн,
+    ETL, человеческий процесс. У агента направления нет — там звезда."""
     pos = _layout(m, order, edges)
     xs = [p[0] for p in pos.values()] or [0]
     ys = [p[1] for p in pos.values()] or [0]
@@ -349,12 +755,10 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
 
     svg = []
     top = max((x.n for x in edges.values()), default=1)
-    drawn: set[tuple[str, str]] = set()
-    for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1].n):
-        if a not in pos or b not in pos or (a, b) in drawn:
+    for a, b, n_edge, label in _pairs(edges):
+        if a not in pos or b not in pos:
             continue
-        drawn.add((a, b))
-        width = 1 + 4 * (e.n / top)
+        width = 1 + 4 * (n_edge / top)
 
         # Петля: `tool:Bash → tool:Bash`, 142 раза. Прямая кривая из узла в себя
         # вырождается в точку, поэтому рисуем дужку сбоку — иначе самый частый
@@ -363,46 +767,36 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
             x, y = pos[a]
             svg.append(
                 # Сбоку, а не сверху: сверху к узлу приходят входящие рёбра, и
-                # петля садилась ровно на их стрелку. Дуга с подписью умещаются
-                # в стометровый зазор между соседями по рангу.
+                # петля садилась ровно на их стрелку.
                 f'<path d="M{x+160},{y+14} C{x+198},{y+6} {x+198},{y+46} {x+160},{y+38}" '
                 f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" '
                 f'marker-end="url(#a)"/>'
-                f'<text x="{x+218}" y="{y+30}" class="el">↺ {e.n:,}</text>')
+                f'<text x="{x+218}" y="{y+30}" class="el">↺ {n_edge:,}</text>')
             continue
 
-        x1, y1 = pos[a]; x2, y2 = pos[b]
-        # Обратное ребро между той же парой ложится на ту же кривую: 4 088 туда и
-        # 4 068 обратно сливались в одну линию с двумя налезающими подписями.
-        # Пара — это один round trip, так его и рисуем.
-        back = edges.get((b, a))
-        if back is not None:
-            drawn.add((b, a))
-            width = 1 + 4 * (max(e.n, back.n) / top)
-            label = f"{e.n:,} ⇄ {back.n:,}"
-            marker = ' marker-start="url(#r)" marker-end="url(#a)"'
-        else:
-            label, marker = f"{e.n:,}", ' marker-end="url(#a)"'
-
+        x1, y1 = pos[a]
+        x2, y2 = pos[b]
+        marker = (' marker-start="url(#r)" marker-end="url(#a)"' if "⇄" in label
+                  else ' marker-end="url(#a)"')
         svg.append(
             f'<path d="M{x1+80},{y1+26} C{x1+80},{y1+70} {x2+80},{y2-40} {x2+80},{y2}" '
             f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}"{marker}/>'
-            f'<text x="{(x1+x2)/2+84}" y="{(y1+y2)/2+20}" class="el">{label}</text>'
-        )
-    for node, (x, y) in pos.items():
-        if node in (START, END):
-            svg.append(f'<rect x="{x+20}" y="{y}" width="120" height="26" rx="13" class="term"/>'
-                       f'<text x="{x+80}" y="{y+18}" class="nl term-t">{html.escape(node)}</text>')
-            continue
-        s = m.nodes[node]
-        share = s["cost"] / m.total_cost if m.total_cost else 0
-        cls = "hot" if share > 0.15 else ("warm" if share > 0.05 else "cool")
-        name, second = _node_label(node, s)
-        svg.append(
-            f'<rect x="{x}" y="{y}" width="160" height="52" rx="6" class="node {cls}"/>'
-            f'<text x="{x+80}" y="{y+21}" class="nl">{html.escape(name[:24])}</text>'
-            f'<text x="{x+80}" y="{y+39}" class="ns">{html.escape(second)}</text>'
-        )
+            f'<text x="{(x1+x2)/2+84}" y="{(y1+y2)/2+20}" class="el">{label}</text>')
+
+    svg += _nodes_svg(m, pos, color)
+    return "".join(svg), w, h
+
+
+def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
+                found: list[Finding] | None = None,
+                inflation: list[ContextCost] | None = None) -> str:
+    order, edges = _spine(m, max_nodes, min_edge)
+    color = _series(m)
+    hub = _hub(m)
+    if hub in order:
+        graph, w, h = _graph_radial(m, order, edges, hub, color)
+    else:
+        graph, w, h = _graph_layered(m, order, edges, color)
 
     rows = "".join(
         f"<tr><td class=r>{v.n / m.n_cases:.1%}</td><td class=r>{_usd(v.cost)}</td>"
@@ -456,14 +850,25 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
                     + html.escape(PRICING_NOTE.format(amount=_usd(m.total_cost), days=days))
                     + '</div>')
 
+    flame_svg, flame_cap = _flame_svg(m)
+    flame_block = (
+        "<h2>Where the money goes</h2>"
+        f"{flame_svg}<div class=sub>{html.escape(flame_cap)}</div>"
+        if flame_svg else ""
+    )
+    infl_block = _inflation_html(m, inflation or [])
+
     return f"""<!doctype html><html lang=en><meta charset=utf-8>
 <title>traceroutine — agent process report</title><meta name=viewport content="width=device-width,initial-scale=1">
 <style>
 :root{{--bg:#fff;--fg:#18181b;--mut:#71717a;--line:#e4e4e7;--edge:#a1a1aa;
---cool:#f4f4f5;--warm:#fde68a;--hot:#fca5a5;--card:#fafafa;--accent:#b4322e}}
+--cool:#f4f4f5;--warm:#fde68a;--hot:#fca5a5;--card:#fafafa;--accent:#b4322e;
+--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--sh:#b8c0cc;--sx:#e2e2e6;--fbg:#f6f6f7;
+--ink:#18181b}}
 @media(prefers-color-scheme:dark){{:root{{--bg:#0c0c0e;--fg:#fafafa;--mut:#a1a1aa;
 --line:#27272a;--edge:#52525b;--cool:#1c1c20;--warm:#78350f;--hot:#7f1d1d;--card:#141417;
---accent:#f87171}}}}
+--accent:#f87171;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--sh:#4a5464;--sx:#31313a;
+--fbg:#111114;--ink:#0c0c0e}}}}
 *{{box-sizing:border-box}}body{{margin:0;padding:32px;background:var(--bg);color:var(--fg);
 font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}}
 h1{{font-size:20px;margin:0 0 4px}}h2{{font-size:15px;margin:32px 0 12px;color:var(--mut);
@@ -473,7 +878,9 @@ text-transform:uppercase;letter-spacing:.06em}}
 .note{{margin:14px 0 26px;padding:10px 14px;border-left:3px solid var(--mut);color:var(--fg);font-size:14px;line-height:1.5}}
 .t{{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;min-width:110px}}
 .t b{{display:block;font-size:20px}}.t span{{color:var(--mut);font-size:12px}}
-.scroll{{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}}
+.scroll{{overflow-x:auto;border:1px solid var(--line);border-radius:8px;
+background:var(--card)}}
+.scroll>svg{{display:block;margin:0 auto}}
 table{{border-collapse:collapse;width:100%;font-size:13px}}
 th,td{{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left}}
 th{{color:var(--mut);font-weight:500}}td.r{{text-align:right;white-space:nowrap}}
@@ -498,23 +905,52 @@ border-radius:50%;background:var(--accent);color:#fff;font-size:11px;flex:none}}
 border-top:1px solid var(--line)}}
 .st code{{background:var(--cool);padding:3px 7px;border-radius:5px;white-space:nowrap}}
 .st span{{color:var(--mut);font-size:12px}}
+.lead{{color:var(--mut);font-size:13px;margin:0 0 14px;max-width:78ch}}
+.legend{{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:8px;font-size:12px;color:var(--mut)}}
+.lg{{display:inline-flex;align-items:center;gap:6px}}
+.sw{{width:10px;height:10px;border-radius:2px;display:inline-block;
+box-shadow:inset 0 0 0 1px rgba(128,128,128,.35)}}
+.s1{{background:var(--s1)}}.s2{{background:var(--s2)}}.s3{{background:var(--s3)}}
+.sh{{background:var(--sh)}}.sx{{background:var(--sx)}}
+.flame{{display:block;width:100%;height:auto}}
+.fbg{{fill:var(--fbg)}}
+.fb{{stroke:none}}.fb.s1{{fill:var(--s1)}}.fb.s2{{fill:var(--s2)}}.fb.s3{{fill:var(--s3)}}
+.fb.sh{{fill:var(--sh)}}.fb.sx{{fill:var(--sx)}}
+.fl{{font-size:11px;fill:var(--ink);pointer-events:none;font-weight:500}}
+.fb.sh+.fl,.fb.sx+.fl{{fill:var(--fg)}}
+.fg{{font-size:10px;fill:var(--mut);text-anchor:end}}
+.fcut{{stroke:var(--fg);stroke-width:1;stroke-dasharray:4 3;opacity:.45}}
+.fcl{{font-size:10px;fill:var(--fg);text-anchor:end}}
+.stripe.s1{{fill:var(--s1)}}.stripe.s2{{fill:var(--s2)}}.stripe.s3{{fill:var(--s3)}}
+.stripe.sh{{fill:var(--sh)}}.stripe.sx{{fill:var(--sx)}}
+.em{{text-anchor:middle}}.elbg{{fill:var(--card)}}
+.fclbg{{fill:var(--bg)}}
+.infl{{display:flex;flex-direction:column;gap:8px}}
+.ir{{display:grid;grid-template-columns:minmax(90px,auto) auto 1fr auto;align-items:center;
+gap:12px}}
+.iat{{color:var(--mut);font-size:12px;white-space:nowrap}}
+.ibar{{height:14px;background:var(--cool);border-radius:3px;overflow:hidden}}
+.ibar i{{display:block;height:100%;background:var(--accent);border-radius:3px}}
+.ival{{font-weight:600;white-space:nowrap;color:var(--accent)}}
 </style>
 <h1>traceroutine</h1><div class=sub>{period} &middot; {days} &middot; generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>
 <div class=tiles>{tiles}</div>
 {pricing_note}
+{flame_block}
 {find_block}
-{next_block}
+{infl_block}
 <h2>Process graph</h2>
-<div class=scroll><svg width="{w}" height="{h}" viewBox="0 0 {w} {h}">
-<defs><marker id=a markerWidth=8 markerHeight=8 refX=7 refY=3 orient=auto>
-<path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"/></marker>
-<marker id=r markerWidth=8 markerHeight=8 refX=1 refY=3 orient=auto>
-<path d="M8,0 L8,6 L1,3 z" fill="var(--edge)"/></marker></defs>{''.join(svg)}</svg></div>
+<div class=scroll><svg width="{w:.0f}" height="{h:.0f}" viewBox="0 0 {w:.0f} {h:.0f}">
+<defs><marker id=a markerWidth=9 markerHeight=9 refX=8 refY=3.5 orient=auto markerUnits=userSpaceOnUse>
+<path d="M0,0.5 L0,6.5 L8,3.5 z" fill="var(--edge)"/></marker>
+<marker id=r markerWidth=9 markerHeight=9 refX=1 refY=3.5 orient=auto markerUnits=userSpaceOnUse>
+<path d="M9,0.5 L9,6.5 L1,3.5 z" fill="var(--edge)"/></marker></defs>{graph}</svg></div>
 {free_note}
 <h2>Most expensive paths</h2>
 <div class=scroll><table><tr><th>Share</th><th>Total</th><th>Avg</th><th>Steps</th><th>Path</th></tr>
 {rows}</table></div>
 {res_block}
+{next_block}
 </html>"""
 
 
