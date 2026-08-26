@@ -78,6 +78,18 @@ FREE_STEPS_NOTE = (
 )
 
 
+# Транскрипты не содержат биллинга — только счётчики токенов. Деньги мы СЧИТАЕМ
+# по прайс-листу, и на подписке это не счёт, а теневая цена. Без этой оговорки
+# первый же пользователь на Pro за $20 видит «$788» и делает единственно
+# разумный вывод: инструмент врёт. Число при этом полезное — оно даёт общую
+# линейку, по которой сравнимы пути; врёт не оно, а слово «потрачено».
+PRICING_NOTE = (
+    "Cost is computed from token counts at API list prices — transcripts carry no "
+    "billing data. On a subscription plan this is what the tokens would have cost, "
+    "not what you were charged. Override the table with `--pricing`."
+)
+
+
 def _spine(m: Model, max_nodes: int, min_edge: float) -> tuple[list[str], dict]:
     """Хребет процесса: top-N узлов по стоимости + рёбра выше порога частоты."""
     ranked = sorted(m.nodes.items(), key=lambda kv: -kv[1]["cost"])
@@ -112,8 +124,10 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
         f"| Events | {m.n_events:,} |",
         f"| Distinct paths | {len(m.variants):,} |",
         f"| Tokens | {m.total_tokens:,} |",
-        f"| Cost | {_usd(m.total_cost)} |",
+        f"| Cost (API list prices) | {_usd(m.total_cost)} |",
         f"| Rework rate | {m.rework_rate:.1%} |",
+        "",
+        f"_{PRICING_NOTE}_",
         "",
     ]
 
@@ -363,11 +377,12 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
     stats = {
         "Cases": f"{m.n_cases:,}", "Events": f"{m.n_events:,}",
         "Paths": f"{len(m.variants):,}", "Tokens": f"{m.total_tokens:,}",
-        "Cost": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
+        "Cost (list)": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
     }
     tiles = "".join(f'<div class=t><b>{v}</b><span>{k}</span></div>' for k, v in stats.items())
+    pricing_note = f'<div class=sub>{html.escape(PRICING_NOTE.replace(chr(96), ""))}</div>' 
 
-    return f"""<!doctype html><html lang=ru><meta charset=utf-8>
+    return f"""<!doctype html><html lang=en><meta charset=utf-8>
 <title>traceroutine — agent process report</title><meta name=viewport content="width=device-width,initial-scale=1">
 <style>
 :root{{--bg:#fff;--fg:#18181b;--mut:#71717a;--line:#e4e4e7;--edge:#a1a1aa;
@@ -411,6 +426,7 @@ border-top:1px solid var(--line)}}
 </style>
 <h1>traceroutine</h1><div class=sub>{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>
 <div class=tiles>{tiles}</div>
+{pricing_note}
 {find_block}
 {next_block}
 <h2>Process graph</h2>
@@ -509,7 +525,7 @@ def render_check(rep: "CheckReport", m: Model, *, max_nodes: int = 18,
 
     t = p.thresholds
     rows = [("Runs", f"{rep.n_cases:,}", ""),
-            ("Cost", _usd(rep.total_cost), "")]
+            ("Cost (API list prices)", _usd(rep.total_cost), "")]
     if rep.fitness is not None:
         rows.append(("Fitness", f"{rep.fitness:.3f}",
                      f"≥ {t.fitness_min:.3f}" if t.fitness_min is not None else ""))

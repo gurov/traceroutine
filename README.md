@@ -29,8 +29,10 @@ vocabulary activity_map.yaml: 18 activities (none:-)
   3. Working rhythm `chat → tool:Bash` — 39% of the budget
 ```
 
-That is my own history: 456 tasks, $776 of real spend. The first finding is the whole
-thesis:
+That is my own history: 456 tasks. The dollars are API list prices rather than an
+invoice — I pay a $20 subscription, so this is what those tokens would have cost, not
+what I was billed. Worth a moment on its own: a flat fee hides a month that prices out
+at $776. The first finding is the whole thesis:
 
 > **Results of `tool:Bash` carry 12% of the budget through context.**
 > The step itself burns no tokens and shows as **$0.00** in every cost breakdown. But
