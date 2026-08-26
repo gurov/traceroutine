@@ -1,0 +1,69 @@
+# Релиз по тегу: сборка, проверка, PyPI, GitHub Release.
+#
+# Публикует не то, что лежит на ноутбуке, а то, что лежит в теге. Это не
+# гигиена ради гигиены: 0.1.1 уже уехала на PyPI, сообщая о себе «0.1.0»,
+# потому что локальная копия разошлась с исходником. Сборка на чистой машине
+# из чекаута тега убирает весь этот класс дефектов — локального состояния
+# просто нет.
+#
+# Токен здесь тоже не нужен: PyPI Trusted Publishing выдаёт короткоживущее
+# OIDC-удостоверение прямо этому воркфлоу. Долгоживущий account-scoped токен
+# с ноутбука после настройки можно отозвать.
+#
+# Разовая настройка на pypi.org → traceroutine → Manage → Publishing:
+#   owner: gurov · repository: traceroutine
+#   workflow: release.yml · environment: pypi
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # OIDC для Trusted Publishing
+      contents: write        # создать GitHub Release на теге
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      # Версия живёт в одном месте — __init__.py, и pyproject читает её оттуда.
+      # Тег — второе место, где она записана, и разъехаться они могут молча:
+      # PyPI примет пакет с любым номером, а тег останется указывать на другой.
+      - name: tag matches the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(uv run --no-project python -c \
+            "import re,pathlib;print(re.search(r'\"(.+)\"',pathlib.Path('src/traceroutine/__init__.py').read_text()).group(1))")
+          [ "$tag" = "$pkg" ] || { echo "tag $tag != package $pkg"; exit 1; }
+          echo "version=$pkg" >> "$GITHUB_ENV"
+
+      # Тесты на теге прогоняются заново: воркфлоу tests.yml висит на push в
+      # main и на PR, а тег может указывать куда угодно.
+      - run: uv run --extra anthropic --with pytest pytest -q
+
+      - run: uv build
+
+      # Артефакт проверяется распакованным, а не по имени файла: имя берётся из
+      # метаданных, а метаданные — из того же исходника, который мы уже сверили.
+      - name: the wheel reports the version it claims
+        run: |
+          uv run --no-project --with "dist/traceroutine-${{ env.version }}-py3-none-any.whl" \
+            traceroutine version | grep -qx "${{ env.version }}"
+
+      - run: uv publish --trusted-publishing always
+
+      - name: github release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes "https://pypi.org/project/traceroutine/${{ env.version }}/" \
+            --repo "$GITHUB_REPOSITORY"
