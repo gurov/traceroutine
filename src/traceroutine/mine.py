@@ -49,6 +49,11 @@ class Model:
     # Разбивка по ресурсам возвращает потерянное: видно, что дорого не «обращение к
     # модели», а конкретно эскалация на большую.
     resource_cost: dict[str, dict] = field(default_factory=dict)
+    # Период, который покрывает лог. Сумма без периода не значит ничего: «$813»
+    # читается как «за сегодня», «за месяц» и «за всё время» одинаково, а это
+    # три разных вывода. Первое, что спросили, увидев отчёт.
+    t_min: float = 0.0
+    t_max: float = 0.0
 
     @property
     def rework_rate(self) -> float:
@@ -136,6 +141,10 @@ def mine(events: list[dict]) -> Model:
             c_dur += dur
             m.n_events += 1
             m.total_tokens += tok
+            ts = ev["ts_start"] or 0.0
+            if ts:
+                m.t_min = ts if not m.t_min else min(m.t_min, ts)
+                m.t_max = max(m.t_max, ev["ts_end"] or ts)
 
         m.total_cost += c_cost
 

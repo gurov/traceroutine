@@ -83,11 +83,30 @@ FREE_STEPS_NOTE = (
 # первый же пользователь на Pro за $20 видит «$788» и делает единственно
 # разумный вывод: инструмент врёт. Число при этом полезное — оно даёт общую
 # линейку, по которой сравнимы пути; врёт не оно, а слово «потрачено».
+PRICING_NOTE_HEAD = "This is not a bill."
 PRICING_NOTE = (
-    "Cost is computed from token counts at API list prices — transcripts carry no "
-    "billing data. On a subscription plan this is what the tokens would have cost, "
-    "not what you were charged. Override the table with `--pricing`."
+    "Transcripts record tokens, not charges — on a subscription you paid your flat fee "
+    "instead. {amount} is what these tokens would cost at API list prices over the "
+    "{days} above, and it is here as a common ruler: it makes trajectories comparable "
+    "with each other."
 )
+
+
+def _period(m: Model) -> tuple[str, str]:
+    """Диапазон лога и его длина. Сумма без периода не значит ничего.
+
+    «$813» читается как «за сегодня», «за месяц» и «за всё время» одинаково —
+    это три разных вывода. Дата в шапке была временем ГЕНЕРАЦИИ отчёта и только
+    усиливала путаницу: читатель видел сегодняшнее число рядом с большой суммой.
+    """
+    if not m.t_min:
+        return "", "log"
+    a = datetime.fromtimestamp(m.t_min, timezone.utc)
+    b = datetime.fromtimestamp(m.t_max, timezone.utc)
+    days = max(1, round((m.t_max - m.t_min) / 86400))
+    same_year = a.year == b.year
+    left = f"{a.day} {a:%b}" + ("" if same_year else f" {a.year}")
+    return f"{left} – {b.day} {b:%b} {b.year}", f"{days} day" + ("s" if days != 1 else "")
 
 
 def _spine(m: Model, max_nodes: int, min_edge: float) -> tuple[list[str], dict]:
@@ -120,7 +139,8 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
     L = [
         "# traceroutine — agent process report",
         "",
-        f"_{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}_",
+        f"_{_period(m)[0] or 'log'} · {_period(m)[1]} · "
+        f"generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}_",
         "",
         "## Summary",
         "",
@@ -133,7 +153,8 @@ def render_markdown(m: Model, *, max_nodes: int = 25, min_edge: float = 0.02,
         f"| Cost (API list prices) | {_usd(m.total_cost)} |",
         f"| Rework rate | {m.rework_rate:.1%} |",
         "",
-        f"_{PRICING_NOTE}_",
+        f"**{PRICING_NOTE_HEAD}** "
+        + PRICING_NOTE.format(amount=_usd(m.total_cost), days=_period(m)[1]),
         "",
     ]
 
@@ -294,10 +315,19 @@ def _layout(m: Model, order: list[str], edges: dict) -> dict:
     by_rank: dict[int, list[str]] = {}
     for node in [START] + order + [END]:
         by_rank.setdefault(rank.get(node, 1), []).append(node)
-    pos = {}
-    for r, nodes in by_rank.items():
-        for i, node in enumerate(nodes):
-            pos[node] = (60 + i * 260 - (len(nodes) - 1) * 130, 60 + r * 120)
+    # Широкий ранг сворачивается в несколько строк. Семь инструментов в одну
+    # линию давали холст в 1940 px — читатель видел кусок и должен был скроллить
+    # вбок, а у агента ранг «всё, что вызывает chat» широк по определению.
+    ROW = 4
+    pos, y = {}, 60
+    for r in sorted(by_rank):
+        nodes = by_rank[r]
+        for i in range(0, len(nodes), ROW):
+            row = nodes[i:i + ROW]
+            for j, node in enumerate(row):
+                pos[node] = (60 + j * 260 - (len(row) - 1) * 130, y)
+            y += 120
+    del r
     # Ранг с несколькими узлами центрируется относительно 60 и уезжает в
     # отрицательный x, а viewBox начинается с нуля: узел и подпись ребра просто
     # обрезались слева. Сдвигаем весь холст, а не отдельный ранг, иначе поедут
@@ -318,15 +348,47 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
     w, h = max(xs) + 320, max(ys) + 120
 
     svg = []
-    for (a, b), e in edges.items():
-        if a in pos and b in pos:
-            x1, y1 = pos[a]; x2, y2 = pos[b]
-            width = 1 + 4 * (e.n / max(x.n for x in edges.values()))
+    top = max((x.n for x in edges.values()), default=1)
+    drawn: set[tuple[str, str]] = set()
+    for (a, b), e in sorted(edges.items(), key=lambda kv: -kv[1].n):
+        if a not in pos or b not in pos or (a, b) in drawn:
+            continue
+        drawn.add((a, b))
+        width = 1 + 4 * (e.n / top)
+
+        # Петля: `tool:Bash → tool:Bash`, 142 раза. Прямая кривая из узла в себя
+        # вырождается в точку, поэтому рисуем дужку сбоку — иначе самый частый
+        # цикл в логе просто не виден.
+        if a == b:
+            x, y = pos[a]
             svg.append(
-                f'<path d="M{x1+80},{y1+26} C{x1+80},{y1+70} {x2+80},{y2-40} {x2+80},{y2}" '
-                f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" marker-end="url(#a)"/>'
-                f'<text x="{(x1+x2)/2+84}" y="{(y1+y2)/2+20}" class="el">{e.n}</text>'
-            )
+                # Сбоку, а не сверху: сверху к узлу приходят входящие рёбра, и
+                # петля садилась ровно на их стрелку. Дуга с подписью умещаются
+                # в стометровый зазор между соседями по рангу.
+                f'<path d="M{x+160},{y+14} C{x+198},{y+6} {x+198},{y+46} {x+160},{y+38}" '
+                f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" '
+                f'marker-end="url(#a)"/>'
+                f'<text x="{x+218}" y="{y+30}" class="el">↺ {e.n:,}</text>')
+            continue
+
+        x1, y1 = pos[a]; x2, y2 = pos[b]
+        # Обратное ребро между той же парой ложится на ту же кривую: 4 088 туда и
+        # 4 068 обратно сливались в одну линию с двумя налезающими подписями.
+        # Пара — это один round trip, так его и рисуем.
+        back = edges.get((b, a))
+        if back is not None:
+            drawn.add((b, a))
+            width = 1 + 4 * (max(e.n, back.n) / top)
+            label = f"{e.n:,} ⇄ {back.n:,}"
+            marker = ' marker-start="url(#r)" marker-end="url(#a)"'
+        else:
+            label, marker = f"{e.n:,}", ' marker-end="url(#a)"'
+
+        svg.append(
+            f'<path d="M{x1+80},{y1+26} C{x1+80},{y1+70} {x2+80},{y2-40} {x2+80},{y2}" '
+            f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}"{marker}/>'
+            f'<text x="{(x1+x2)/2+84}" y="{(y1+y2)/2+20}" class="el">{label}</text>'
+        )
     for node, (x, y) in pos.items():
         if node in (START, END):
             svg.append(f'<rect x="{x+20}" y="{y}" width="120" height="26" rx="13" class="term"/>'
@@ -383,10 +445,16 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
     stats = {
         "Cases": f"{m.n_cases:,}", "Events": f"{m.n_events:,}",
         "Paths": f"{len(m.variants):,}", "Tokens": f"{m.total_tokens:,}",
-        "Cost (list)": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
+        "Cost, list prices": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
     }
     tiles = "".join(f'<div class=t><b>{v}</b><span>{k}</span></div>' for k, v in stats.items())
-    pricing_note = f'<div class=sub>{html.escape(PRICING_NOTE.replace(chr(96), ""))}</div>' 
+    period, days = _period(m)
+    # Не class=sub: серым мелким шрифтом это читалось как служебная подпись рядом
+    # с датой, и вопрос «откуда $800, у меня же подписка» задавали, глядя прямо
+    # на неё. Отдельный блок, жирное начало, ответ первым предложением.
+    pricing_note = (f'<div class=note><b>{html.escape(PRICING_NOTE_HEAD)}</b> '
+                    + html.escape(PRICING_NOTE.format(amount=_usd(m.total_cost), days=days))
+                    + '</div>')
 
     return f"""<!doctype html><html lang=en><meta charset=utf-8>
 <title>traceroutine — agent process report</title><meta name=viewport content="width=device-width,initial-scale=1">
@@ -402,6 +470,7 @@ h1{{font-size:20px;margin:0 0 4px}}h2{{font-size:15px;margin:32px 0 12px;color:v
 text-transform:uppercase;letter-spacing:.06em}}
 .sub{{color:var(--mut);font-size:13px;margin-bottom:24px}}
 .tiles{{display:flex;flex-wrap:wrap;gap:10px}}
+.note{{margin:14px 0 26px;padding:10px 14px;border-left:3px solid var(--mut);color:var(--fg);font-size:14px;line-height:1.5}}
 .t{{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;min-width:110px}}
 .t b{{display:block;font-size:20px}}.t span{{color:var(--mut);font-size:12px}}
 .scroll{{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}}
@@ -430,7 +499,7 @@ border-top:1px solid var(--line)}}
 .st code{{background:var(--cool);padding:3px 7px;border-radius:5px;white-space:nowrap}}
 .st span{{color:var(--mut);font-size:12px}}
 </style>
-<h1>traceroutine</h1><div class=sub>{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>
+<h1>traceroutine</h1><div class=sub>{period} &middot; {days} &middot; generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}</div>
 <div class=tiles>{tiles}</div>
 {pricing_note}
 {find_block}
@@ -438,7 +507,9 @@ border-top:1px solid var(--line)}}
 <h2>Process graph</h2>
 <div class=scroll><svg width="{w}" height="{h}" viewBox="0 0 {w} {h}">
 <defs><marker id=a markerWidth=8 markerHeight=8 refX=7 refY=3 orient=auto>
-<path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"/></marker></defs>{''.join(svg)}</svg></div>
+<path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"/></marker>
+<marker id=r markerWidth=8 markerHeight=8 refX=1 refY=3 orient=auto>
+<path d="M8,0 L8,6 L1,3 z" fill="var(--edge)"/></marker></defs>{''.join(svg)}</svg></div>
 {free_note}
 <h2>Most expensive paths</h2>
 <div class=scroll><table><tr><th>Share</th><th>Total</th><th>Avg</th><th>Steps</th><th>Path</th></tr>
