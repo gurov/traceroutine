@@ -15,10 +15,12 @@
 #   workflow: release.yml · environment: pypi
 name: release
 
+# Только тег. workflow_dispatch тут — ловушка: ручной запуск повторно дошёл бы до
+# publish и упал на «file already exists». Перезапуск упавшего релиза делается
+# кнопкой Re-run в Actions, отдельный триггер для этого не нужен.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
-  workflow_dispatch:
 
 permissions: {}
 
