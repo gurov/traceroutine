@@ -134,3 +134,61 @@ def test_mermaid_labels_are_escaped():
     out = render_markdown(m)
     graph = out.split("```mermaid")[1].split("```")[0]
     assert '(' not in graph.split("flowchart TD")[1].split("classDef")[0].replace('(["', '').replace('"])', '')
+
+
+# --- one-shot: путь по умолчанию --------------------------------------------
+# Три команды и два промежуточных файла стояли между человеком и первой
+# находкой. Эти тесты стерегут ровно то, что их больше нет.
+
+def _run(*args, cwd=None):
+    from typer.testing import CliRunner
+
+    from traceroutine.cli import app
+    return CliRunner().invoke(app, [str(a) for a in args])
+
+
+def test_bare_command_does_the_whole_pipeline(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    traces = tmp_path / "t.json"
+    subprocess.run([sys.executable, str(ROOT / "examples/gen_otlp.py"), str(traces)],
+                   check=True, capture_output=True)
+    res = _run("--from", traces, "-f", "md")
+    assert res.exit_code == 0, res.output
+    # Все три артефакта конвейера на месте: отчёт читают, остальные два нужны
+    # следующим командам (`check`, `diff`).
+    for name in ("events.parquet", "activity_map.yaml", "report.md"):
+        assert (tmp_path / name).exists(), name
+    assert "nothing leaves this machine" in res.output
+
+
+def test_bare_command_is_quiet_about_plumbing(tmp_path, monkeypatch):
+    """Служебные строки подкоманд глушатся, находки — нет. Первый экран должен
+    быть находками, а не отчётом о проделанной работе."""
+    monkeypatch.chdir(tmp_path)
+    traces = tmp_path / "t.json"
+    subprocess.run([sys.executable, str(ROOT / "examples/gen_otlp.py"), str(traces)],
+                   check=True, capture_output=True)
+    out = _run("--from", traces, "-f", "md").output
+    assert "raw labels ->" not in out
+    assert "flatten=" not in out
+    assert "at list prices" in out
+
+
+def test_missing_source_says_what_to_type(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("traceroutine.cli.DEFAULT_SOURCES", [tmp_path / "nowhere"])
+    res = _run()
+    assert res.exit_code == 2
+    assert "--from" in res.output
+
+
+def test_subcommands_still_work_and_stay_verbose(tmp_path, monkeypatch):
+    """One-shot глушит вывод через модульный флаг — значит он обязан сниматься,
+    иначе следующая команда в том же процессе онемеет."""
+    monkeypatch.chdir(tmp_path)
+    traces = tmp_path / "t.json"
+    subprocess.run([sys.executable, str(ROOT / "examples/gen_otlp.py"), str(traces)],
+                   check=True, capture_output=True)
+    assert _run("--from", traces, "-f", "md").exit_code == 0
+    out = _run("ingest", traces, "-o", tmp_path / "e2.parquet").output
+    assert "flatten=" in out

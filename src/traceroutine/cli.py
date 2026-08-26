@@ -23,6 +23,80 @@ from .store import read, write
 
 app = typer.Typer(add_completion=False, help="Process mining for LLM agent traces.")
 
+# Куда смотреть, когда не сказали куда. Пока источник один; список — чтобы
+# добавление второго (OpenClaw) было строчкой, а не разветвлением.
+# One-shot глушит служебные строки конвейера, но НЕ предупреждения: «неизвестно,
+# включён ли кеш в input», «нет цен для модели» меняют смысл чисел, и прятать их
+# ради красивого вывода значит соврать красиво.
+_QUIET = False
+
+
+def _say(msg: str) -> None:
+    if not _QUIET:
+        typer.echo(msg)
+
+
+DEFAULT_SOURCES = [Path.home() / ".claude" / "projects"]
+
+# Case notion по адаптеру. Это НЕ вкусовщина: на транскриптах Claude Code сессия
+# как кейс даёт 61 кейс и 61 уникальный путь — вариантный анализ вырождается
+# полностью, потому что двух одинаковых рабочих дней не бывает. Повторяется
+# задача: один запрос пользователя со всей работой под ним.
+DEFAULT_CASE = {"claude-code": "task"}
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    src: Optional[Path] = typer.Option(None, "--from", exists=True, readable=True,
+                                       help="where the traces are; autodetected if omitted"),
+    fmt: str = typer.Option("html", "-f", "--format", help="html | md"),
+    out: Optional[Path] = typer.Option(None, "-o", "--out"),
+):
+    """Без подкоманды — прогнать всё: трейсы → словарь → отчёт.
+
+    Три команды и два промежуточных файла стояли между человеком и первой
+    находкой, причём `--case` требовалось понять ДО того, как он что-то увидел.
+    Подкоманды никуда не делись — они для тех, кому нужен контроль; но путь по
+    умолчанию обязан быть одной строкой без аргументов.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    if src is None:
+        src = next((p for p in DEFAULT_SOURCES if p.exists()), None)
+    if src is None:
+        looked = ", ".join(str(p) for p in DEFAULT_SOURCES)
+        typer.secho(
+            f"no traces found in {looked}.\n"
+            f"Point it somewhere: traceroutine --from <file-or-directory>\n"
+            f"Formats: OpenTelemetry JSON, Claude Code transcripts, chat transcripts.",
+            fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
+    ad = pick(src)
+    case = DEFAULT_CASE.get(ad.name, "trace")
+    # Печатаем ~ вместо домашнего каталога: эту строку вставляют в issue и в
+    # скриншоты, а имя пользователя там никому не нужно.
+    try:
+        shown = "~/" + str(src.relative_to(Path.home()))
+    except ValueError:
+        shown = str(src)
+    typer.secho(f"reading {shown} as {ad.name} — nothing leaves this machine",
+                fg=typer.colors.BRIGHT_BLACK)
+
+    global _QUIET
+    log, vocabulary = Path("events.parquet"), MAP_DEFAULT
+    _QUIET = True
+    try:
+        ingest(src=src, out=log, adapter=None, case_notion=case, flatten="genai", pricing=None)
+        abstract(events=log, map_path=vocabulary, backend="none", model=None,
+                 target=12, batch=False, runs=0)
+        report(events=log, out=out, fmt=fmt, max_nodes=0, map_path=vocabulary, process=None)
+    finally:
+        _QUIET = False
+
+
 
 @app.command()
 def ingest(
@@ -40,7 +114,7 @@ def ingest(
     events = normalize(ad.read(src), case_notion=case_notion, flatten=flatten, pricing=pr,
                        unknown_cache_convention=unknown_cache)
     n = write(events, out)
-    typer.echo(f"{ad.name}: {n:,} events -> {out}  (case={case_notion}, flatten={flatten})")
+    _say(f"{ad.name}: {n:,} events -> {out}  (case={case_notion}, flatten={flatten})")
     if unknown_cache:
         typer.secho(
             f"unknown whether cache is folded into input_tokens for: "
@@ -108,12 +182,12 @@ def abstract(
     amap.save(map_path)
 
     c = amap.coverage
-    typer.echo(
+    _say(
         f"{c['raw_labels']} raw labels -> {c['canonical_labels']} canonical "
         f"(rules removed {c['recovered_by_rules']}) -> {c['activities']} activities "
         f"-> {map_path}"
     )
-    if c["activities"] > target:
+    if c["activities"] > target and not _QUIET:
         typer.secho(
             f"{c['activities']} activities against a target of {target}: the graph will "
             f"be hard to read. Merge the extras by hand in overrides.",
@@ -171,8 +245,8 @@ def report(
         amap = ActivityMap.load(map_path)
         for e in evs:
             e["activity"] = amap.activity(e["activity_raw"])
-        typer.echo(f"vocabulary {map_path}: {len(set(amap.mapping.values()))} activities "
-                   f"({amap.backend})")
+        _say(f"vocabulary {map_path}: {len(set(amap.mapping.values()))} activities "
+             f"({amap.backend})")
     m = mine(evs)
     found = findings(m, evs)
     if process:
@@ -200,8 +274,8 @@ def report(
         raise SystemExit("--format: html | md")
     out.write_text(text, encoding="utf-8")
     typer.echo(
-        f"{m.n_cases:,} cases · {len(m.variants):,} paths · ${m.total_cost:,.2f} · "
-        f"rework {m.rework_rate:.1%} -> {out}"
+        f"{m.n_cases:,} cases · {len(m.variants):,} paths · "
+        f"${m.total_cost:,.2f} at list prices · rework {m.rework_rate:.1%} -> {out}"
     )
     for i, f in enumerate(found[:3], 1):
         tag = f" (up to ${f.impact_usd:,.2f})" if f.impact_usd else ""
