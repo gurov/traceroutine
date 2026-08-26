@@ -100,7 +100,13 @@ def _spine(m: Model, max_nodes: int, min_edge: float) -> tuple[list[str], dict]:
         for (a, b), e in m.edges.items()
         if (a in keep or a == START) and (b in keep or b == END) and e.n / max_n >= min_edge
     }
-    order = [a for a, _ in ranked if a in keep]
+    # Узел прошёл по стоимости, но все его рёбра отсеялись по частоте — на графе
+    # это коробка, висящая в воздухе. На синтетике не встречается, на реальном
+    # логе Claude Code таких оказалось двенадцать из восемнадцати: у агента
+    # длинный хвост инструментов, вызываемых считаные разы. Их место — в таблице
+    # расходов по ресурсам, а не в схеме процесса.
+    linked = {a for e in edges for a in e}
+    order = [a for a, _ in ranked if a in keep and a in linked]
     return order, edges
 
 
