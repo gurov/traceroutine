@@ -1,6 +1,6 @@
 [project]
 name = "traceroutine"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Process mining for LLM agent traces: find out where the tokens and the time actually go"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,6 +46,11 @@ traceroutine = "traceroutine.cli:app"
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+# Версия живёт в одном месте — __init__.py. Раньше её дублировал pyproject,
+# и 0.1.1 уехала на PyPI, сообщая о себе «0.1.0»: копии разъехались молча.
+[tool.hatch.version]
+path = "src/traceroutine/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traceroutine"]
