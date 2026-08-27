@@ -80,14 +80,20 @@ class Model:
     def top_variants(self, k: int = 20) -> list[Variant]:
         return sorted(self.variants, key=lambda v: -v.cost)[:k]
 
-    def cost_concentration(self) -> list[tuple[Variant, float, float]]:
+    def cost_concentration(self, min_n: int = 1) -> list[tuple[Variant, float, float]]:
         """Парето: (вариант, доля кейсов, накопленная доля стоимости).
 
         Сортировка по стоимости ОДНОГО кейса, а не по суммарной: вопрос
         «какая доля прогонов съедает 80% счёта» — это про дорогие прогоны,
         а не про частые.
+
+        `min_n` отсекает варианты, встретившиеся меньше указанного числа раз.
+        Путь, случившийся ОДИН раз, — это прогон, а не путь: говорить о нём
+        «класс траекторий, который надо чинить» нельзя, а доля счёта у него
+        честная. Поэтому фильтр здесь, а не в вызывающем коде.
         """
-        ordered = sorted(self.variants, key=lambda v: -v.cost_avg)
+        ordered = sorted((v for v in self.variants if v.n >= min_n),
+                         key=lambda v: -v.cost_avg)
         out, acc = [], 0.0
         for v in ordered:
             acc += v.cost

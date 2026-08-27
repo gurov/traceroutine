@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 
 from traceroutine.analyze import (RECOVERY_WINDOW, VARIANT_MIN_REUSE, _path_digest,
-                               _rotation_key, context_inflation, drift, find_cycles,
-                               findings)
+                               _rotation_key, _tail_variants, context_inflation, drift,
+                               find_cycles, findings)
 from traceroutine.mine import Model, Variant, mine
 
 
@@ -195,6 +195,77 @@ def test_context_inflation_ignores_compaction():
            ev("c1", "tool:x", ts=1.0),
            ev("c1", "chat", cost=0.1, tcached=5_000, ts=2.0)]
     assert all(c.added_avg >= 0 for c in context_inflation(evs))
+
+
+def test_a_path_seen_once_is_a_run_not_a_path():
+    """РЕГРЕССИЯ: находка про «редкие пути» цитировала три варианта с n = 1
+    длиной 1 225, 975 и 524 шага. Это три прогона, названные классами."""
+    m = Model(n_cases=40, n_events=400, total_cost=100.0)
+    m.variants = [Variant(seq=("a", "b"), n=38, cost=20.0)]
+    m.variants += [Variant(seq=("a", f"x{i}"), n=1, cost=40.0) for i in range(2)]
+    tail, tail_cost, _ = _tail_variants(m)
+    assert tail == [], "одиночный прогон попал в «редкие пути»"
+    assert tail_cost == 0.0
+    assert all(v.n >= 2 for v, _, _ in m.cost_concentration(min_n=2))
+
+
+def test_concentration_and_tail_do_not_both_speak():
+    """Обе находки — про одно: расходы собраны в узком классе траекторий. Вместе
+    они занимали два пункта из пяти в списке дел и называли почти одно число."""
+    evs = []
+    for c in range(60):                       # дешёвая рутина, два варианта
+        evs += seq(f"a{c}", ["plan", "act"], cost=0.05)
+    for c in range(40):
+        evs += seq(f"b{c}", ["plan", "act", "act"], cost=0.05)
+    for c in range(4):                        # редкий дорогой путь, но ПОВТОРЯЮЩИЙСЯ
+        evs += seq(f"hot{c}", ["plan", "retry", "retry", "act"], cost=3.0)
+    kinds = [f.kind for f in findings(mine(evs), evs, limit=8)]
+    assert "tail" in kinds
+    assert "concentration" not in kinds, "две находки об одном и том же"
+
+
+def _compacting_log(turns=40, every=10, base=1000, step=500, rate=1e-6):
+    """Длинный прогон со сбросом контекста — то, чем является кодовый агент и
+    чем НЕ является ни один синтетический пример на 5 шагов."""
+    evs, ts, p = [], 0.0, base
+    for t in range(turns):
+        if t and t % every == 0:
+            p = base                                  # компакция
+        evs.append(ev("c1", "chat", cost=p * rate, tcached=p, ts=ts))
+        ts += 1
+        evs.append(ev("c1", "tool:Bash", ts=ts))
+        ts += 1
+        p += step
+    return evs
+
+
+def test_carried_cost_never_exceeds_the_bill():
+    """Доли не бывают больше целого.
+
+    РЕГРЕССИЯ на дефект, найденный на логе первого внешнего пользователя: график
+    раздувания контекста суммировался в 123% его расходов. `remaining` считался
+    до конца кейса, а прогоны там по 1 225 шагов со сбросами контекста — то, что
+    добавлено до сброса, следующие ходы уже не несут. На собственном логе (медиана
+    24 шага) сброс случился один раз на 6 628 ходов, поэтому метрика три сессии
+    выглядела здоровой.
+    """
+    evs = _compacting_log()
+    spend = sum(e["cost_usd"] for e in evs)
+    carried = sum(c.est_usd for c in context_inflation(evs, top=99))
+    assert spend > 0
+    assert carried <= spend, f"${carried:.4f} приписано при расходах ${spend:.4f}"
+
+
+def test_context_added_before_a_reset_is_not_charged_after_it():
+    """Тот же дефект в лоб: удлинение прогона ПОСЛЕ сброса не должно удорожать
+    шаг, сделанный до сброса."""
+    short = context_inflation(_compacting_log(turns=12, every=10), top=99)[0]
+    long_ = context_inflation(_compacting_log(turns=40, every=10), top=99)[0]
+    per_call_short = short.carried_tokens / short.n
+    per_call_long = long_.carried_tokens / long_.n
+    assert per_call_long == pytest.approx(per_call_short, rel=0.35), (
+        "цена шага поехала от того, сколько ходов случилось за следующими сбросами"
+    )
 
 
 # --- дрейф ------------------------------------------------------------------

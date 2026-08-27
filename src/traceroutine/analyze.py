@@ -128,13 +128,24 @@ def _error_cost(events: list[dict]) -> tuple[float, int, Counter]:
     return cost, n, kinds
 
 
+# Путь, встретившийся один раз, — это прогон, а не путь.
+PATH_MIN_RUNS = 2
+
+
 def _tail_variants(m: Model) -> tuple[list[Variant], float, float]:
-    """«Длинный хвост»: редкие пути, каждый из которых дороже медианного прогона."""
+    """«Длинный хвост»: редкие пути, каждый из которых дороже медианного прогона.
+
+    Одиночки исключены. На логе первого внешнего пользователя находка цитировала
+    три «пути» с `n = 1` длиной 1 225, 975 и 524 шага — то есть три отдельных
+    прогона, названных классами. Это ровно та тавтология, ради которой заведён
+    `variants_apply`, только проехавшая мимо него: порог там стоит на уровне ЛОГА
+    (повторяемость ≥ 50%), а вырождается конкретная находка.
+    """
     if not m.variants or not m.n_cases:
         return [], 0.0, 0.0
     med = sorted(v.cost_avg for v in m.variants)[len(m.variants) // 2]
     tail = [v for v in m.variants
-            if v.n / m.n_cases < 0.05 and v.cost_avg > med * 2]
+            if PATH_MIN_RUNS <= v.n and v.n / m.n_cases < 0.05 and v.cost_avg > med * 2]
     return (sorted(tail, key=lambda v: -v.cost)[:5],
             sum(v.cost for v in tail),
             sum(v.n for v in tail) / m.n_cases)
@@ -195,15 +206,23 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
             evidence=[f"iterations beyond the first: {c.occurrences}"],
         ))
 
-    # 2. Концентрация стоимости по траекториям.
-    conc = m.cost_concentration()
+    # 2. Дорогой длинный хвост.
+    tail, tail_cost, tail_share = _tail_variants(m)
+    tail_fired = bool(variants_apply and tail and tail_cost / total > 0.1)
+
+    # 3. Концентрация стоимости по траекториям — та же мысль, что и хвост, только
+    # без имён и без суммы. Если хвост сработал, это дубликат: на логе первого
+    # внешнего пользователя список из пяти пунктов содержал «13% прогонов дают 50%
+    # расходов» и «редкие пути — 13.5% прогонов — съедают 51% бюджета». Список дел,
+    # где два пункта из пяти об одном, перестаёт быть списком дел.
+    conc = m.cost_concentration(min_n=PATH_MIN_RUNS)
     acc_cases = acc_cost = 0.0
     for v, share, cum in conc:
         acc_cases += share
         acc_cost = cum
         if cum >= 0.5:
             break
-    if variants_apply and acc_cases and acc_cases <= 0.25:
+    if variants_apply and not tail_fired and acc_cost >= 0.5 and 0 < acc_cases <= 0.25:
         out.append(Finding(
             kind="concentration",
             title=f"{acc_cases:.0%} of runs account for {acc_cost:.0%} of spend",
@@ -213,9 +232,7 @@ def findings(m: Model, events: list[dict], limit: int = 5) -> list[Finding]:
             evidence=[f"most expensive path: {' → '.join(conc[0][0].seq[:6])}"],
         ))
 
-    # 3. Дорогой длинный хвост.
-    tail, tail_cost, tail_share = _tail_variants(m)
-    if variants_apply and tail and tail_cost / total > 0.1:
+    if tail_fired:
         out.append(Finding(
             kind="tail",
             title=f"Rare paths ({tail_share:.1%} of runs) eat {tail_cost / total:.0%} of the budget",
@@ -333,6 +350,36 @@ class ContextCost:
     est_usd: float = 0.0
 
 
+def _carry_until(evs: list[dict], turns: list[int], prompt_size) -> list[int]:
+    """До какого хода доживает контекст, добавленный в промежутке k.
+
+    Раньше здесь стояло `len(turns) - k - 1` — «до конца кейса». На коротких
+    прогонах это верно, на длинных — нет: агент компактит контекст, и всё, что
+    добавлено до сброса, следующие ходы уже не несут и не оплачивают.
+
+    Дефект был не косметическим и виден только на чужом логе. У первого внешнего
+    пользователя прогоны по 1 225 шагов, сбросов в них множество, и график
+    раздувания суммировался в 123% от всех расходов: доли превышали целое. На
+    моём логе (case notion `task`, медиана 24 шага) падение размера промпта
+    случилось ОДИН раз на 6 628 ходов, поэтому три сессии подряд метрика
+    выглядела здоровой.
+
+    Отсечка по любому падению промпта — намеренно консервативная: какая именно
+    часть контекста ушла, из счётчиков не видно, поэтому после сброса мы просто
+    перестаём что-либо утверждать. Заодно это даёт инвариант, который стоит
+    беречь: внутри отрезка без сбросов сумма carried равна расходам на промпт
+    минус базовый промпт, то есть **сумма долей больше целого не бывает**.
+    """
+    n = len(turns)
+    out = [n - 1] * max(n - 1, 0)
+    last = n - 1
+    for k in range(n - 2, -1, -1):
+        out[k] = last
+        if prompt_size(evs[turns[k + 1]]) < prompt_size(evs[turns[k]]):
+            last = k
+    return out
+
+
 def context_inflation(events: list[dict], top: int = 6) -> list[ContextCost]:
     """Кто раздувает контекст — и во что это обходится на всей оставшейся траектории.
 
@@ -375,12 +422,13 @@ def context_inflation(events: list[dict], top: int = 6) -> list[ContextCost]:
     for evs in by_case.values():
         evs = sorted(evs, key=lambda e: (e["ts_start"], e["event_id"]))
         turns = [i for i, e in enumerate(evs) if prompt_size(e)]
+        carry_until = _carry_until(evs, turns, prompt_size)
         for k, (i, j) in enumerate(zip(turns, turns[1:])):
             delta = prompt_size(evs[j]) - prompt_size(evs[i])
             if delta <= 0:
                 continue                     # компакция или сброс контекста
             between = [evs[x]["activity"] for x in range(i + 1, j)] or [evs[i]["activity"]]
-            remaining = len(turns) - k - 1
+            remaining = carry_until[k] - k
             for name in between:
                 share = delta / len(between)
                 added[name].append(share)
