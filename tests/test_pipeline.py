@@ -137,6 +137,69 @@ def test_mermaid_labels_are_escaped():
 
 
 
+# --- пачки вызовов ----------------------------------------------------------
+# Инструменты не вызывают друг друга: 97.5% переходов в логе кодового агента —
+# это одно чередование «ход модели ↔ вызов». Оставшиеся 2.3% не цепочка, а
+# ПАРАЛЛЕЛИЗМ: медиана зазора между ними 0.000 с против 7.3 с у «ход → вызов».
+# Раньше это шло в rework и в циклы, то есть инструмент требовал чинить ровно то,
+# что агент делает правильно.
+
+def _turn(case, req, tools, ts=0.0, cost=1.0):
+    """Ход модели, выдавший пачку вызовов."""
+    out = [ev(case, "chat", cost=cost, ts=ts)]
+    out[0]["event_id"] = req
+    for i, t in enumerate(tools):
+        e = ev(case, f"tool:{t}", ts=ts + 0.001 * (i + 1))
+        e["parent_id"] = req
+        out.append(e)
+    return out
+
+
+def test_parallel_calls_are_not_rework():
+    """Четыре `Edit` из одного хода — один шаг с четырьмя целями."""
+    from traceroutine.mine import mine
+    evs = _turn("c1", "req1", ["Edit"] * 4, ts=0.0)
+    m = mine(evs)
+    assert m.rework_events == 0, "пачка засчитана как повтор работы"
+    assert m.parallel_events == 4 and m.parallel_batches == 1
+    assert m.turns_saved == 3
+
+
+def test_the_same_tool_in_two_turns_is_rework():
+    """А вот повтор ЧЕРЕЗ ход модели — по-прежнему повтор.
+
+    Сравниваем с прогоном, где второй инструмент другой: разница и есть вклад
+    самого инструмента. Абсолютное число тут не годится — повторный `chat` сам
+    по себе тоже повтор, и он есть в обоих прогонах."""
+    from traceroutine.mine import mine
+    same = mine(_turn("c1", "req1", ["Edit"], ts=0.0) + _turn("c1", "req2", ["Edit"], ts=10.0))
+    other = mine(_turn("c1", "req1", ["Edit"], ts=0.0) + _turn("c1", "req2", ["Read"], ts=10.0))
+    assert same.rework_events - other.rework_events == 1
+    assert same.turns_saved == 0
+
+
+def test_parallel_calls_are_not_a_loop():
+    """РЕГРЕССИЯ: `tool:Bash → tool:Bash` 143 раза в моём логе — это пачки, а не
+    самая частая петля процесса."""
+    from traceroutine.analyze import find_cycles
+    evs = _turn("c1", "req1", ["Bash"] * 5, ts=0.0)
+    assert [c for c in find_cycles(evs) if c.pattern == ("tool:Bash",)] == []
+
+
+def test_a_flat_trace_is_not_one_giant_batch():
+    """РЕГРЕССИЯ: у плоского OTLP-трейса все спаны висят на trace-спане, которого
+    среди событий нет. Без проверки «родитель сам есть в логе» в пачку попадал
+    весь кейс, и rework обнулялся на синтетике целиком."""
+    from traceroutine.mine import batched_parents, mine
+    evs = []
+    for i, a in enumerate(["search", "read", "search", "read"]):
+        e = ev("c1", f"tool:{a}", ts=float(i))
+        e["parent_id"] = "trace-root-not-in-the-log"
+        evs.append(e)
+    assert batched_parents(evs) == set()
+    assert mine(evs).rework_events == 2
+
+
 # --- flame: дерево префиксов ------------------------------------------------
 # Directly-follows граф у агента вырождается в звезду с хабом: топология задана
 # конструкцией и ничего не сообщает. Дерево префиксов — линза, которая на этих

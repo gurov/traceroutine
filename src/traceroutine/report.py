@@ -563,6 +563,15 @@ INFL_LEAD = (
     "prompt and is re-read on every later turn, so the bill arrives spread over the "
     "rest of the trajectory — under the model call, where no breakdown by tool exists."
 )
+# Оборотная сторона того же: платят ХОДЫ, а не вызовы. Несколько вызовов, выданных
+# одним ходом, делят одно чтение промпта на всех, поэтому пачка — это не «повтор
+# работы», а ходы, которых не случилось. Число измеренное: сколько уже сэкономлено.
+# Сколько ещё можно — из лога не видно, какие вызовы независимы, и мы не гадаем.
+INFL_BATCH = (
+    "The same arithmetic in reverse: turns are what gets paid for, not calls. "
+    "{n:,} of the calls here went out alongside a sibling in the same turn, sharing "
+    "one reading of the prompt between them — {saved:,} turns that never happened."
+)
 
 
 def _at_call(m: Model, step: str) -> str:
@@ -591,7 +600,10 @@ def _inflation_html(m: Model, infl: list[ContextCost]) -> str:
         f'<span class=ival>{_usd(c.est_usd)}</span></div>'
         for c in infl
     )
-    return (f'<h2>{INFL_TITLE}</h2><p class=lead>{html.escape(INFL_LEAD)}</p>'
+    lead = INFL_LEAD
+    if m.turns_saved:
+        lead += " " + INFL_BATCH.format(n=m.parallel_events, saved=m.turns_saved)
+    return (f'<h2>{INFL_TITLE}</h2><p class=lead>{html.escape(lead)}</p>'
             f'<div class=infl>{rows}</div>')
 
 
@@ -623,6 +635,13 @@ def _nodes_svg(m: Model, pos: dict, color: dict) -> list[str]:
             f'<text x="{x + 80:.1f}" y="{y + 21:.1f}" class="nl">{html.escape(name[:24])}</text>'
             f'<text x="{x + 80:.1f}" y="{y + 39:.1f}" class="ns">{html.escape(second)}</text>')
     return out
+
+
+def _loop_label(e, n: int) -> str:
+    """Петля бывает двух разных вещей, и путать их нельзя. `↺` — агент вернулся к
+    тому же шагу следующим ходом. `⇉` — тот же ход выдал несколько вызовов сразу;
+    это не цикл, а параллелизм, и находки его уже не считают повтором работы."""
+    return f"⇉ {n:,}" if e.parallel * 2 > e.n else f"↺ {n:,}"
 
 
 def _pairs(edges: dict) -> list[tuple[str, str, int, str]]:
@@ -711,7 +730,7 @@ def _graph_radial(m: Model, order: list[str], edges: dict, hub: str,
                 f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" '
                 f'marker-end="url(#a)"/>'
                 f'<text x="{ax + ux * 84:.1f}" y="{ay + uy * 84:.1f}" class="el em">'
-                f'↺ {n_edge:,}</text>')
+                f'{_loop_label(edges[(a, b)], n_edge)}</text>')
             continue
         bx, by = centre(b)
         marker = (' marker-start="url(#r)" marker-end="url(#a)"' if "⇄" in label
@@ -771,7 +790,8 @@ def _graph_layered(m: Model, order: list[str], edges: dict,
                 f'<path d="M{x+160},{y+14} C{x+198},{y+6} {x+198},{y+46} {x+160},{y+38}" '
                 f'fill="none" stroke="var(--edge)" stroke-width="{width:.1f}" '
                 f'marker-end="url(#a)"/>'
-                f'<text x="{x+218}" y="{y+30}" class="el">↺ {n_edge:,}</text>')
+                f'<text x="{x+218}" y="{y+30}" class="el">'
+                f'{_loop_label(edges[(a, b)], n_edge)}</text>')
             continue
 
         x1, y1 = pos[a]
@@ -841,6 +861,10 @@ def render_html(m: Model, *, max_nodes: int = 60, min_edge: float = 0.01,
         "Paths": f"{len(m.variants):,}", "Tokens": f"{m.total_tokens:,}",
         "Cost, list prices": _usd(m.total_cost), "Rework": f"{m.rework_rate:.1%}",
     }
+    # Ходы, которых не было. Не оценка возможной экономии, а измеренная: столько
+    # раз агент выдал несколько вызовов одним ходом вместо нескольких ходов.
+    if m.turns_saved:
+        stats["Turns saved by batching"] = f"{m.turns_saved:,}"
     tiles = "".join(f'<div class=t><b>{v}</b><span>{k}</span></div>' for k, v in stats.items())
     period, days = _period(m)
     # Не class=sub: серым мелким шрифтом это читалось как служебная подпись рядом

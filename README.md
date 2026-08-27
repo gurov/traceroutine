@@ -17,18 +17,18 @@ no account, no arguments:
 ```console
 $ uvx traceroutine
 reading ~/.claude/projects as claude-code — nothing leaves this machine
-483 cases · 335 paths · $849.06 at list prices · rework 89.2% -> report.html
-  1. Results of `tool:Bash` carry 12% of the budget through context (up to $105.23)
+485 cases · 334 paths · $867.34 at list prices · rework 81.7% -> report.html
+  1. Results of `tool:Bash` carry 12% of the budget through context (up to $107.54)
   2. Loop `chat → tool:Edit` runs an extra time (up to $51.33)
-  3. Working rhythm `chat → tool:Bash` — 41% of the budget
+  3. Working rhythm `chat → tool:Bash` — 43% of the budget
 ```
 
 Three seconds, and that is my own history. The first finding is the whole thesis:
 
 > **Results of `tool:Bash` carry 12% of the budget through context.**
 > The step itself burns no tokens and shows as **$0.00** in every cost breakdown. But
-> each of its results adds ~1,391 tokens to the prompt, and those are re-read on
-> **every** subsequent turn: 129M tokens carried in total. Fix by truncating output,
+> each of its results adds ~1,388 tokens to the prompt, and those are re-read on
+> **every** subsequent turn: 132M tokens carried in total. Fix by truncating output,
 > not by switching models.
 
 A tool call costs nothing when it happens and keeps costing for the rest of the run.
@@ -40,7 +40,7 @@ carried *how many* dollars across the rest of the trajectory.
 
 The dollars are API list prices, not an invoice. I pay a $20 subscription, so this is
 what those tokens would have cost — which is its own small finding: a flat fee hides a
-month that prices out at $849. Cross-checked against
+month that prices out at $867. Cross-checked against
 [ccusage](https://github.com/ryoppippi/ccusage) on the same instant: the two agree to
 0.05% on the total and to within 0.25% on every token category.
 
@@ -52,22 +52,22 @@ run as above, rendered by GitHub straight out of `report -f md`, no image involv
 ```mermaid
 flowchart TD
     S(["▶ start"])
-    n0["chat<br/>7,096× · $849.06"]
-    n1["tool:Bash<br/>4,422×"]
-    n2["tool:Edit<br/>1,060×"]
-    n3["tool:Read<br/>617×"]
-    n4["tool:Write<br/>392×"]
+    n0["chat<br/>7,158× · $867.34"]
+    n1["tool:Bash<br/>4,573×"]
+    n2["tool:Edit<br/>997×"]
+    n3["tool:Read<br/>610×"]
+    n4["tool:Write<br/>384×"]
     E(["■ end"])
-    n0 -->|4257| n1
-    n1 -->|4237| n0
-    n0 -->|1049| n2
-    n2 -->|1049| n0
-    n0 -->|603| n3
-    n3 -->|596| n0
-    S -->|483| n0
-    n0 -->|440| E
-    n0 -->|390| n4
-    n4 -->|388| n0
+    n0 -->|4408| n1
+    n1 -->|4387| n0
+    n0 -->|986| n2
+    n2 -->|986| n0
+    n0 -->|596| n3
+    n3 -->|589| n0
+    S -->|485| n0
+    n0 -->|441| E
+    n0 -->|382| n4
+    n4 -->|380| n0
     n1 -->|143| n1
     classDef hot fill:#b4322e,stroke:#7d1f1c,color:#fff
     classDef err stroke:#d97706,stroke-width:3px
@@ -75,11 +75,15 @@ flowchart TD
     class n1,n2,n3,n4 err
 ```
 
-Everything returns to `chat`, because that is what a coding agent is: 4,257 calls out to
-`tool:Bash` and 4,237 back. That traffic is the 41% of the budget in finding 3 — not an
+Everything returns to `chat`, because that is what a coding agent is: 4,408 calls out to
+`tool:Bash` and 4,387 back. That traffic is the 43% of the budget in finding 3 — not an
 anomaly but the working rhythm, and it only reads as a rhythm once it is drawn.
-`tool:Bash` also follows itself 143 times: commands issued back to back with no model
-turn in between. Amber outlines mark activities that produced errors.
+`tool:Bash` also follows itself 143 times — and those are not a loop. The gap between
+them has a median of 0.000s, against 7.3s for `chat → tool`: one turn issued several
+commands at once. Tools never call each other, so 97.5% of all transitions here are that
+single alternation; the 2.3% that is not is parallelism, and it is the opposite of waste —
+calls in one turn share a single reading of the prompt. Amber outlines mark activities
+that produced errors.
 
 Steps shown without a dollar figure spend no tokens at the moment of the call. That is
 not the same as free — their results stay in the prompt and are re-read on every later

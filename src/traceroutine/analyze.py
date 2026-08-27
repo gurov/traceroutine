@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from .mine import END, START, Model, Variant
+from .mine import END, START, Model, Variant, batched_parents
 from .store import cases
 
 
@@ -59,10 +59,24 @@ def find_cycles(events: list[dict], max_period: int = 4) -> list[Cycle]:
     а не потери.
     """
     found: dict[tuple[str, ...], Cycle] = {}
+    # Четыре `tool:Edit`, выданные одним ходом, — это один шаг с четырьмя целями,
+    # а не цикл длиной один, прокрутившийся четырежды. Без склейки самая частая
+    # «петля» в логе кодового агента оказывается его сильной стороной:
+    # параллельные вызовы делят одно чтение промпта на всех.
+    batched = batched_parents(events)
 
     for case_id, evs in cases(events):
-        seq = [e["activity"] for e in evs]
-        costs = [e["cost_usd"] or 0.0 for e in evs]
+        seq: list[str] = []
+        costs: list[float] = []
+        prev: tuple[str, str] | None = None
+        for e in evs:
+            key = (e["activity"], e["parent_id"]) if e["parent_id"] in batched else None
+            if key is not None and key == prev:
+                costs[-1] += e["cost_usd"] or 0.0
+                continue
+            prev = key
+            seq.append(e["activity"])
+            costs.append(e["cost_usd"] or 0.0)
         n = len(seq)
         i = 0
         seen_here: set[tuple[str, ...]] = set()

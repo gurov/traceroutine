@@ -32,6 +32,7 @@ class Edge:
     n: int = 0
     cost: float = 0.0       # стоимость целевой активности, накопленная по этому переходу
     duration: float = 0.0
+    parallel: int = 0       # из них выданных одним ходом, а не одно за другим
 
 
 @dataclass
@@ -45,6 +46,11 @@ class Model:
     total_tokens: int = 0
     rework_events: int = 0
     loop_cost: dict[str, float] = field(default_factory=dict)
+    # Событий, выданных пачкой, и сколько таких пачек. «Пачка» — события с общим
+    # родителем: один ход модели выдал несколько вызовов сразу. Это НЕ повтор
+    # работы, а её противоположность, и раньше оно считалось как rework.
+    parallel_events: int = 0
+    parallel_batches: int = 0
     # Модель — это РЕСУРС, а не активность (слой Abstract схлопывает chat:<model> → chat).
     # Разбивка по ресурсам возвращает потерянное: видно, что дорого не «обращение к
     # модели», а конкретно эскалация на большую.
@@ -58,6 +64,25 @@ class Model:
     @property
     def rework_rate(self) -> float:
         return self.rework_events / self.n_events if self.n_events else 0.0
+
+    @property
+    def turns_saved(self) -> int:
+        """Сколько ходов модели не случилось благодаря пачкам.
+
+        Стоимость агента определяется числом ХОДОВ, а не числом вызовов: каждый
+        ход перечитывает весь промпт целиком, а вызовы внутри одного хода делят
+        это чтение на всех. Пачка из четырёх вызовов — это три хода, которых не
+        было, то есть три неоплаченных перечитывания контекста.
+
+        Число измеренное, а не гипотетическое: оно говорит, сколько пачка уже
+        сэкономила, и ничего не говорит о том, сколько ещё можно сэкономить —
+        какие вызовы независимы, из лога не видно.
+        """
+        return self.parallel_events - self.parallel_batches
+
+    @property
+    def parallel_rate(self) -> float:
+        return self.parallel_events / self.n_events if self.n_events else 0.0
 
     @property
     def variant_reuse(self) -> float:
@@ -102,6 +127,23 @@ class Model:
         return out
 
 
+def batched_parents(events: list[dict]) -> set[str]:
+    """Шаги, выдавшие больше одного вызова за раз.
+
+    Пачка не обязана лежать внутри одного кейса, поэтому считается по всему логу
+    разом. Родитель обязан САМ быть событием лога — иначе это не пачка, а просто
+    общий корень: у плоского OTLP-трейса все спаны кейса висят на trace-спане,
+    которого среди событий нет, и без этой проверки в «пачку» попадал весь кейс
+    целиком, а rework обнулялся. У транскриптов Claude Code наоборот — родителем
+    вызова стоит `req_…` того самого хода модели, и он в логе есть: 631 группа
+    из 655. Время подтверждает независимо: 321 пара из 781 у Claude Code реально
+    пересекается по интервалам, у синтетического OTLP — ноль из 3 488.
+    """
+    ids = {ev["event_id"] for ev in events}
+    siblings = Counter(ev["parent_id"] for ev in events if ev["parent_id"] in ids)
+    return {p for p, n in siblings.items() if n > 1}
+
+
 def mine(events: list[dict]) -> Model:
     m = Model()
     vmap: dict[tuple[str, ...], Variant] = {}
@@ -110,10 +152,20 @@ def mine(events: list[dict]) -> Model:
     )
     res_stat: dict[str, dict] = defaultdict(lambda: {"n": 0, "cost": 0.0, "tokens": 0})
 
+    batched = batched_parents(events)
+    m.parallel_batches = len(batched)
+    m.parallel_events = sum(1 for ev in events if ev["parent_id"] in batched)
+
     for case_id, evs in cases(events):
         m.n_cases += 1
         seq = tuple(e["activity"] for e in evs)
         seen: Counter[str] = Counter()
+        # Второй `tool:Bash` из той же пачки — не второе обращение к инструменту,
+        # а половина одного. Ключ по (активность, родитель) не даёт ему попасть
+        # в rework: у меня 20% вызовов выдаются пачками, и без этого rework
+        # завышался на 4.6 пункта — на инструменте, который агент как раз
+        # использует правильно.
+        batch_seen: set[tuple[str, str]] = set()
         c_cost = c_dur = 0.0
         c_err = 0
 
@@ -138,10 +190,13 @@ def mine(events: list[dict]) -> Model:
                 r["cost"] += cost
                 r["tokens"] += tok
 
-            seen[act] += 1
-            if seen[act] > 1:               # активность уже встречалась в этом кейсе
-                m.rework_events += 1
-                m.loop_cost[act] = m.loop_cost.get(act, 0.0) + cost
+            key = (act, ev["parent_id"] if ev["parent_id"] in batched else ev["event_id"])
+            if key not in batch_seen:       # не пачка — значит каждое событие своё
+                batch_seen.add(key)
+                seen[act] += 1
+                if seen[act] > 1:           # активность уже встречалась в этом кейсе
+                    m.rework_events += 1
+                    m.loop_cost[act] = m.loop_cost.get(act, 0.0) + cost
 
             c_cost += cost
             c_dur += dur
@@ -159,6 +214,12 @@ def mine(events: list[dict]) -> Model:
         for i, (a, b) in enumerate(zip((START,) + seq, seq + (END,))):
             e = m.edges.setdefault((a, b), Edge())
             e.n += 1
+            # Переход внутри пачки — не «шаг за шагом», а два вызова одного хода.
+            # Без этого граф рисует петлю `tool:Bash → tool:Bash` там, где находки
+            # уже перестали считать её петлёй, и отчёт спорит сам с собой.
+            if 0 < i < len(seq) and evs[i]["parent_id"] == evs[i - 1]["parent_id"] \
+                    and evs[i]["parent_id"] in batched:
+                e.parallel += 1
             if b != END:
                 e.cost += evs[i]["cost_usd"] or 0.0
                 e.duration += (evs[i]["ts_end"] - evs[i]["ts_start"]) if evs[i]["ts_end"] else 0.0
